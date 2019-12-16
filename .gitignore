@@ -287,3 +287,7 @@ __pycache__/
 
 # IdentityServer workspace
 tempkey.rsa
+
+# Helm
+/samples/kubernetes/**/*.lock
+/samples/kubernetes/**/*.tgz
