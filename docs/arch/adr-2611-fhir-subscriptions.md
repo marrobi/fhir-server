@@ -6,25 +6,25 @@
 
 ## Context
 
-Clients need server-pushed notifications when FHIR resources change, using the standard [R5 topic-based Subscriptions framework](https://hl7.org/fhir/R5/subscriptions.html) and, for R4 and R4B, the [Subscriptions R5 Backport IG](https://hl7.org/fhir/uv/subscriptions-backport/). The managed Azure Health Data Services FHIR service runs R4, so R4 with the Backport IG is the primary target. Topics must be definable through the API on every supported version, even though R4 has no `SubscriptionTopic` resource type. To conform, a server must support `Subscription` read/write, `$status`, at least one channel and at least one payload type. The rest-hook channel also requires a handshake before a subscription becomes `active`. The server already has a commit-ordered transaction log on SQL Server: `dbo.Transactions`, the `Resource.TransactionId` column, and a visibility watermark. It has no subscription engine and no in-memory search evaluator.
+Clients need server-pushed notifications when FHIR resources change, using the standard [R5 topic-based Subscriptions framework](https://hl7.org/fhir/R5/subscriptions.html) and, for R4 and R4B, the [Subscriptions R5 Backport IG](https://hl7.org/fhir/uv/subscriptions-backport/). The managed Azure Health Data Services FHIR service runs R4, so R4 with the Backport IG is the primary target. Topics must be definable through the API on every supported version, even though R4 has no `SubscriptionTopic` resource type. To conform, a server must support `Subscription` read/write, `SubscriptionTopic` read/search (R4B and R5), `$status`, at least one channel and at least one payload type. The rest-hook channel also requires a handshake before a subscription becomes `active`. The server already has an ordered transaction log on SQL Server: `dbo.Transactions`, the `Resource.TransactionId` column, and a visibility watermark. Transaction IDs are allocated when a transaction begins, and the watermark advances only past transactions that have all completed, so the order is consistent but is not strictly commit order. It has no subscription engine and no in-memory search evaluator.
 
 Constraints:
 
 - **No synchronous cost on writes:** notifications must not add a synchronous step to the write path or change existing behaviour when the feature is off.
 - **No impact on existing events:** the `ResourceChangeData` change feed, presumed to feed [Azure Health Data Services events](https://learn.microsoft.com/azure/healthcare-apis/events/events-overview), must not be modified. Reading it is acceptable.
-- **Every write path covered:** events must not be lost or duplicated across crashes, backlogs, or rapid successive updates, and `$import` and bulk paths must be covered.
+- **Every write path covered:** a matching change must produce exactly one logical event (one event number), across crashes, backlogs, and rapid successive updates, and `$import` and bulk paths must be covered. Delivery of that event is a separate, best-effort concern.
 - **Authorization:** notifications must respect authorization ([ADR-2609 SMART fail-closed](adr-2609-smart-authorization-fail-closed.md), [ADR-2610 caller-owned scopes](adr-2610-caller-owned-scopes.md)), even though no HTTP request context exists when a notification is sent.
 
-Three earlier attempts (#4474, #4628, #5478) were closed without review. They were large, multi-layer PRs with no agreed design.
+Three earlier attempts (#4474, #4628, #5478) were closed with no public review recorded. They were large, multi-layer PRs with no agreed design.
 
 ## Options Considered
 
 **Event source and matching**
 
 1. **Match synchronously in the MediatR request pipeline.** *(rejected)* It runs before commit, `$import` and bulk jobs bypass it, and it adds latency to writes.
-2. **Consume the `ResourceChangeData` change feed.** *(viable alternative, not chosen)* It already records create, update and soft delete with the resource version, and avoids adding a second change source. However, its reader takes a table lock that briefly blocks writes. Its retention is controlled outside this repository (by the managed events pipeline), so a lagging subscription reader could lose events. Its insert also adds work inside every write wherever capture is not already on.
+2. **Consume the `ResourceChangeData` change feed.** *(viable alternative, not chosen)* It already records create, update and soft delete with the resource version, and avoids adding a second change source. However, its reader holds a table lock (`TABLOCK, HOLDLOCK`) that can block concurrent writes; the impact has not been measured. Its retention does not appear to be managed in this repository and is presumed to be owned by the managed events pipeline, so a lagging subscription reader could lose events. It records only current versions, so historical versions loaded by `$import` are not captured. Its insert also adds work inside every write wherever capture is not already on.
 3. **One queued job per committed transaction (the prior prototype).** *(rejected)* Job overhead scales with write volume. Parallel jobs cannot advance a single cursor atomically. It also read only current rows, so earlier versions were dropped when a resource was updated again before matching ran.
-4. **Leased singleton pump over `Transactions`.** The pump pages from a cursor to the visibility watermark, matches the exact committed versions in memory, and commits the resulting events and the cursor in one SQL transaction. A per-subscription delivery queue then sends notifications. *(viable, preferred)* `Transactions` is written on every SQL write already, is commit-ordered without locking readers, and its retention can be held back by the subscription cursor. Its main cost is head-of-line latency during long transactions.
+4. **Leased singleton pump over `Transactions`.** The pump pages from a cursor to the visibility watermark, matches the exact committed versions in memory, and commits the resulting events and the cursor in one SQL transaction. A per-subscription delivery queue then sends notifications. *(viable, preferred)* `Transactions` is written on every SQL write already, its visibility watermark gives a consistent order without new locks on writes, and its retention can be held back by the subscription cursor. Its main cost is head-of-line latency during long transactions.
 5. **Evaluate criteria with database queries** (chained parameters, `_has`, terminology). *(rejected)* It needs one query per event per subscription, which does not scale. Such criteria are rejected when the subscription or topic is created.
 
 **Subscription model and topics**
@@ -39,12 +39,12 @@ Implement topic-based subscriptions (R4 Backport, R4B, R5) on SQL Server, behind
 
 **Event pipeline** (option 4, with option 2 as the alternative):
 
-- The event source sits behind a narrow abstraction (`ITransactionEventSource`), so matching and delivery do not depend on which source is used. `Transactions` is the preferred source. The choice between the two is open for product group guidance, and is recorded here before this ADR is accepted. If the change feed is chosen, only the source implementation changes.
+- The event source sits behind a narrow abstraction (`ITransactionEventSource`), so matching and delivery do not depend on which source is used. `Transactions` is the preferred source. The choice between the two is open for product group guidance, and is recorded here before this ADR is accepted. The two sources are not interchangeable: the cursor, deduplication key and activation watermark below are written for `Transactions`, and would be redefined for the change feed. Product group guidance is also needed on whether historical versions loaded by `$import` should notify, and whether change capture and its retention are a supported dependency.
 - A leased `SubscriptionEventWatchdog` pages `dbo.Transactions` from a durable cursor up to the visibility watermark.
-- It reads each transaction **including historical rows** and evaluates the exact version written. `previous` criteria use the immediately preceding version. A missing version is recorded as `Unevaluable`, never silently dropped.
+- It reads each transaction **including historical rows** and evaluates the exact version written. `previous` criteria use the immediately preceding version. A missing version is recorded as `Unevaluable`, never silently dropped. This depends on history being kept: where a resource type uses `no-version`, or a metadata-only update is not versioned, the earlier row is overwritten or deleted during the next write. Version-exact matching therefore requires history for subscribed resource types, or a weaker guarantee for those types; the product group decides which.
 - Each subscription matches only transactions after its activation watermark.
-- Matches go to a durable `dbo.SubscriptionEvents` outbox. Event rows and the cursor commit together, and a unique key makes replays idempotent.
-- Delivery is single-flight per subscription, with bounded retries and stable event numbers. Receipt is best-effort, as the spec defines.
+- Matches go to a durable `dbo.SubscriptionEvents` outbox. Event rows and the cursor commit together, and a unique key makes replays idempotent: each match produces one logical event with one event number.
+- Delivery is single-flight per subscription, with bounded retries and stable event numbers. Receipt is best-effort, as the spec defines: a notification may be delivered more than once (for example, when a response is lost) or not at all, and clients deduplicate by event number.
 - `ResourceChangeData` is not changed.
 
 **Contract:**
@@ -54,7 +54,8 @@ Implement topic-based subscriptions (R4 Backport, R4B, R5) on SQL Server, behind
 - **Payload:** `id-only` is the default. The server adds the content extension when the client omits it.
 - **Operations:** `$status` is in v1. `$events`, `notificationShape` and the Azure channels follow later.
 - **Authorization:** each event, at every payload level, is checked against an authorization snapshot captured when the subscription is created. The server cannot see revocation at the identity provider, so revocation works through `off`/delete, a configurable maximum lifetime, and local role re-evaluation.
-- **Revalidation:** the registry validates every subscription and topic again when it loads them, so resources written through `$import` or bulk operations cannot bypass validation, for example to reach internal endpoints.
+- **Activation grant:** the authorization snapshot is a server-owned record bound to the accepted subscription version and its endpoint. A subscription without a matching grant, for example one written or changed through `$import` or bulk operations, stays inactive: no handshake and no notifications until an authorized caller activates it through the API. Content validation alone does not prove who authorized the subscription.
+- **Revalidation:** the registry also validates every subscription and topic again when it loads them, so imported resources cannot bypass content and endpoint checks, for example to reach internal endpoints.
 - **Loop prevention:** the server's own `Subscription` bookkeeping writes are excluded from matching.
 
 **Not implemented:**
@@ -73,7 +74,7 @@ Full scope, rationale and the delivery plan are in the [design proposal](Proposa
 - **Additive change:** new `SubscriptionEvents` storage, a cursor in `dbo.Parameters`, a pump watchdog, a delivery job type, an in-memory search evaluator in Core, version converters (including R4 `Basic` ↔ topic), and a new data action. `DataActions.All` must be extended. Existing write paths and `ResourceChangeData` are unchanged.
 - **Event source is open:** `Transactions` is preferred and `ResourceChangeData` is a documented alternative. Both are read-only uses of existing data. The final choice awaits product group guidance and is recorded here before acceptance.
 - **Easier:** standard FHIR clients (R4 Backport first) can subscribe and get filtered, ordered notifications with gap detection. The in-memory evaluator and the event pump can be reused for future event-driven features.
-- **Head-of-line latency:** a long `$import` batch or a stalled transaction delays notifications for every subscription, because visibility advances in commit order. A latency target must be set from the phase 0 benchmark.
+- **Head-of-line latency:** a long `$import` batch or a stalled transaction delays notifications for every subscription, because visibility cannot advance past the oldest incomplete transaction. A latency target must be set from the phase 0 benchmark.
 - **History cleanup:** version-exact matching requires gating `InvisibleHistoryCleanupWatchdog` on the subscription cursor, with a maximum-lag escape that records `Unevaluable` events.
 - **Throughput:** a single pump bounds matching throughput. Partitioning by resource type is the fallback if benchmarks require it.
 - **Authorization limits:** the snapshot cannot observe identity-provider revocation, and the default maximum subscription lifetime still needs to be decided.
