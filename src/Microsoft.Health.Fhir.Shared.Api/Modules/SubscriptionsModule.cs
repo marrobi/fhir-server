@@ -23,6 +23,8 @@ using Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry;
+using Microsoft.Health.Fhir.Core.Logging.Metrics;
+using Microsoft.Health.Fhir.Core.Logging.Metrics.Handlers;
 using Microsoft.Health.Fhir.Core.Messages.Search;
 
 namespace Microsoft.Health.Fhir.Api.Modules
@@ -57,6 +59,7 @@ namespace Microsoft.Health.Fhir.Api.Modules
             services.AddSingleton<SubscriptionRegistry>();
             services.AddSingleton<SubscriptionEventProcessor>();
             services.AddSingleton<ISubscriptionChannel, RestHookSubscriptionChannel>();
+            services.TryAddSingleton<ISubscriptionMetricHandler, DefaultSubscriptionMetricHandler>();
 
             // The SQL Server registration replaces this; other data stores do not support subscriptions.
             services.TryAddSingleton<ISubscriptionStore, UnsupportedSubscriptionStore>();

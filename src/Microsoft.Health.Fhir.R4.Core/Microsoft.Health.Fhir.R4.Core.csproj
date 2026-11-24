@@ -35,4 +35,8 @@
 
   <Import Project="..\Microsoft.Health.Fhir.Shared.Core\Microsoft.Health.Fhir.Shared.Core.projitems" Label="Shared" />
 
+  <ItemGroup>
+    <EmbeddedResource Include="Features\Subscriptions\StructureDefinition-subscription-topic-basic.json" LogicalName="subscription-topic-basic.json" />
+  </ItemGroup>
+
 </Project>

@@ -1,0 +1,699 @@
+{
+  "resourceType": "StructureDefinition",
+  "id": "subscription-topic-basic",
+  "url": "http://fhir.microsoft.com/StructureDefinition/subscription-topic-basic",
+  "version": "1.0.0",
+  "name": "SubscriptionTopicBasic",
+  "title": "Subscription topic as Basic (R4)",
+  "status": "draft",
+  "publisher": "Microsoft",
+  "description": "Defines a subscription topic on an R4 FHIR server as a Basic resource with code fhir-types#SubscriptionTopic, carrying the R5 SubscriptionTopic elements as R5 cross-version extensions. Used by the Microsoft FHIR Server for API-defined topics with the Subscriptions R5 Backport IG (ADR-2611).",
+  "fhirVersion": "4.0.1",
+  "kind": "resource",
+  "abstract": false,
+  "type": "Basic",
+  "baseDefinition": "http://hl7.org/fhir/StructureDefinition/Basic",
+  "derivation": "constraint",
+  "differential": {
+    "element": [
+      {
+        "id": "Basic",
+        "path": "Basic",
+        "short": "A subscription topic on an R4 server",
+        "definition": "Carries the elements of an R5 SubscriptionTopic as R5 cross-version extensions, so that topics can be defined through the API on R4 (Subscriptions R5 Backport IG). Event triggers and notification shapes are not supported by this server."
+      },
+      {
+        "id": "Basic.extension",
+        "path": "Basic.extension",
+        "slicing": {
+          "discriminator": [
+            {
+              "type": "value",
+              "path": "url"
+            }
+          ],
+          "rules": "open"
+        },
+        "min": 3,
+        "short": "SubscriptionTopic elements"
+      },
+      {
+        "id": "Basic.extension:url",
+        "path": "Basic.extension",
+        "sliceName": "url",
+        "short": "Canonical identifier of the topic",
+        "min": 1,
+        "max": "1"
+      },
+      {
+        "id": "Basic.extension:url.extension",
+        "path": "Basic.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:url.url",
+        "path": "Basic.extension.url",
+        "fixedUri": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.url"
+      },
+      {
+        "id": "Basic.extension:url.value[x]",
+        "path": "Basic.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:version",
+        "path": "Basic.extension",
+        "sliceName": "version",
+        "short": "Business version of the topic",
+        "min": 0,
+        "max": "1"
+      },
+      {
+        "id": "Basic.extension:version.extension",
+        "path": "Basic.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:version.url",
+        "path": "Basic.extension.url",
+        "fixedUri": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.version"
+      },
+      {
+        "id": "Basic.extension:version.value[x]",
+        "path": "Basic.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:title",
+        "path": "Basic.extension",
+        "sliceName": "title",
+        "short": "Human-readable name",
+        "min": 0,
+        "max": "1"
+      },
+      {
+        "id": "Basic.extension:title.extension",
+        "path": "Basic.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:title.url",
+        "path": "Basic.extension.url",
+        "fixedUri": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.title"
+      },
+      {
+        "id": "Basic.extension:title.value[x]",
+        "path": "Basic.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:status",
+        "path": "Basic.extension",
+        "sliceName": "status",
+        "short": "draft | active | retired | unknown",
+        "min": 1,
+        "max": "1"
+      },
+      {
+        "id": "Basic.extension:status.extension",
+        "path": "Basic.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:status.url",
+        "path": "Basic.extension.url",
+        "fixedUri": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.status"
+      },
+      {
+        "id": "Basic.extension:status.value[x]",
+        "path": "Basic.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:description",
+        "path": "Basic.extension",
+        "sliceName": "description",
+        "short": "Description of the topic",
+        "min": 0,
+        "max": "1"
+      },
+      {
+        "id": "Basic.extension:description.extension",
+        "path": "Basic.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:description.url",
+        "path": "Basic.extension.url",
+        "fixedUri": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.description"
+      },
+      {
+        "id": "Basic.extension:description.value[x]",
+        "path": "Basic.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "markdown"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:resourceTrigger",
+        "path": "Basic.extension",
+        "sliceName": "resourceTrigger",
+        "short": "Definition of a resource-based trigger",
+        "min": 1,
+        "max": "*"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension",
+        "path": "Basic.extension.extension",
+        "slicing": {
+          "discriminator": [
+            {
+              "type": "value",
+              "path": "url"
+            }
+          ],
+          "rules": "open"
+        },
+        "min": 1
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:description",
+        "path": "Basic.extension.extension",
+        "sliceName": "description",
+        "short": "Text representation of the trigger",
+        "min": 0,
+        "max": "1"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:description.extension",
+        "path": "Basic.extension.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:description.url",
+        "path": "Basic.extension.extension.url",
+        "fixedUri": "description"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:description.value[x]",
+        "path": "Basic.extension.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "markdown"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:resource",
+        "path": "Basic.extension.extension",
+        "sliceName": "resource",
+        "short": "Resource type (or URL) the trigger applies to",
+        "min": 1,
+        "max": "1"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:resource.extension",
+        "path": "Basic.extension.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:resource.url",
+        "path": "Basic.extension.extension.url",
+        "fixedUri": "resource"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:resource.value[x]",
+        "path": "Basic.extension.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:supportedInteraction",
+        "path": "Basic.extension.extension",
+        "sliceName": "supportedInteraction",
+        "short": "create | update | delete",
+        "min": 0,
+        "max": "*"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:supportedInteraction.extension",
+        "path": "Basic.extension.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:supportedInteraction.url",
+        "path": "Basic.extension.extension.url",
+        "fixedUri": "supportedInteraction"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:supportedInteraction.value[x]",
+        "path": "Basic.extension.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria",
+        "path": "Basic.extension.extension",
+        "sliceName": "queryCriteria",
+        "short": "Query-based trigger rule",
+        "min": 0,
+        "max": "1"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension",
+        "path": "Basic.extension.extension.extension",
+        "slicing": {
+          "discriminator": [
+            {
+              "type": "value",
+              "path": "url"
+            }
+          ],
+          "rules": "open"
+        }
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:previous",
+        "path": "Basic.extension.extension.extension",
+        "sliceName": "previous",
+        "short": "Rule applied to the previous version",
+        "min": 0,
+        "max": "1"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:previous.extension",
+        "path": "Basic.extension.extension.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:previous.url",
+        "path": "Basic.extension.extension.extension.url",
+        "fixedUri": "previous"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:previous.value[x]",
+        "path": "Basic.extension.extension.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:resultForCreate",
+        "path": "Basic.extension.extension.extension",
+        "sliceName": "resultForCreate",
+        "short": "test-passes | test-fails",
+        "min": 0,
+        "max": "1"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:resultForCreate.extension",
+        "path": "Basic.extension.extension.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:resultForCreate.url",
+        "path": "Basic.extension.extension.extension.url",
+        "fixedUri": "resultForCreate"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:resultForCreate.value[x]",
+        "path": "Basic.extension.extension.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:current",
+        "path": "Basic.extension.extension.extension",
+        "sliceName": "current",
+        "short": "Rule applied to the current version",
+        "min": 0,
+        "max": "1"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:current.extension",
+        "path": "Basic.extension.extension.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:current.url",
+        "path": "Basic.extension.extension.extension.url",
+        "fixedUri": "current"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:current.value[x]",
+        "path": "Basic.extension.extension.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:resultForDelete",
+        "path": "Basic.extension.extension.extension",
+        "sliceName": "resultForDelete",
+        "short": "test-passes | test-fails",
+        "min": 0,
+        "max": "1"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:resultForDelete.extension",
+        "path": "Basic.extension.extension.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:resultForDelete.url",
+        "path": "Basic.extension.extension.extension.url",
+        "fixedUri": "resultForDelete"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:resultForDelete.value[x]",
+        "path": "Basic.extension.extension.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:requireBoth",
+        "path": "Basic.extension.extension.extension",
+        "sliceName": "requireBoth",
+        "short": "Both rules must pass",
+        "min": 0,
+        "max": "1"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:requireBoth.extension",
+        "path": "Basic.extension.extension.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:requireBoth.url",
+        "path": "Basic.extension.extension.extension.url",
+        "fixedUri": "requireBoth"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.extension:requireBoth.value[x]",
+        "path": "Basic.extension.extension.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "boolean"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.url",
+        "path": "Basic.extension.extension.url",
+        "fixedUri": "queryCriteria"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:queryCriteria.value[x]",
+        "path": "Basic.extension.extension.value[x]",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:fhirPathCriteria",
+        "path": "Basic.extension.extension",
+        "sliceName": "fhirPathCriteria",
+        "short": "FHIRPath based trigger rule (%previous and %current)",
+        "min": 0,
+        "max": "1"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:fhirPathCriteria.extension",
+        "path": "Basic.extension.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:fhirPathCriteria.url",
+        "path": "Basic.extension.extension.url",
+        "fixedUri": "fhirPathCriteria"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.extension:fhirPathCriteria.value[x]",
+        "path": "Basic.extension.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.url",
+        "path": "Basic.extension.url",
+        "fixedUri": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.resourceTrigger"
+      },
+      {
+        "id": "Basic.extension:resourceTrigger.value[x]",
+        "path": "Basic.extension.value[x]",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:eventTrigger",
+        "path": "Basic.extension",
+        "sliceName": "eventTrigger",
+        "short": "Event-based triggers are not supported by this server",
+        "min": 0,
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:eventTrigger.url",
+        "path": "Basic.extension.url",
+        "fixedUri": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.eventTrigger"
+      },
+      {
+        "id": "Basic.extension:eventTrigger.value[x]",
+        "path": "Basic.extension.value[x]",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:canFilterBy",
+        "path": "Basic.extension",
+        "sliceName": "canFilterBy",
+        "short": "Filters that subscriptions to this topic may use",
+        "min": 0,
+        "max": "*"
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension",
+        "path": "Basic.extension.extension",
+        "slicing": {
+          "discriminator": [
+            {
+              "type": "value",
+              "path": "url"
+            }
+          ],
+          "rules": "open"
+        },
+        "min": 1
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:description",
+        "path": "Basic.extension.extension",
+        "sliceName": "description",
+        "short": "Description of the filter",
+        "min": 0,
+        "max": "1"
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:description.extension",
+        "path": "Basic.extension.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:description.url",
+        "path": "Basic.extension.extension.url",
+        "fixedUri": "description"
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:description.value[x]",
+        "path": "Basic.extension.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "markdown"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:resource",
+        "path": "Basic.extension.extension",
+        "sliceName": "resource",
+        "short": "Resource type the filter applies to",
+        "min": 0,
+        "max": "1"
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:resource.extension",
+        "path": "Basic.extension.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:resource.url",
+        "path": "Basic.extension.extension.url",
+        "fixedUri": "resource"
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:resource.value[x]",
+        "path": "Basic.extension.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "uri"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:filterParameter",
+        "path": "Basic.extension.extension",
+        "sliceName": "filterParameter",
+        "short": "Search parameter name",
+        "min": 1,
+        "max": "1"
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:filterParameter.extension",
+        "path": "Basic.extension.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:filterParameter.url",
+        "path": "Basic.extension.extension.url",
+        "fixedUri": "filterParameter"
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:filterParameter.value[x]",
+        "path": "Basic.extension.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "string"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:comparator",
+        "path": "Basic.extension.extension",
+        "sliceName": "comparator",
+        "short": "Allowed comparators",
+        "min": 0,
+        "max": "*"
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:comparator.extension",
+        "path": "Basic.extension.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:comparator.url",
+        "path": "Basic.extension.extension.url",
+        "fixedUri": "comparator"
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:comparator.value[x]",
+        "path": "Basic.extension.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:modifier",
+        "path": "Basic.extension.extension",
+        "sliceName": "modifier",
+        "short": "Allowed modifiers",
+        "min": 0,
+        "max": "*"
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:modifier.extension",
+        "path": "Basic.extension.extension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:modifier.url",
+        "path": "Basic.extension.extension.url",
+        "fixedUri": "modifier"
+      },
+      {
+        "id": "Basic.extension:canFilterBy.extension:modifier.value[x]",
+        "path": "Basic.extension.extension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
+      },
+      {
+        "id": "Basic.extension:canFilterBy.url",
+        "path": "Basic.extension.url",
+        "fixedUri": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.canFilterBy"
+      },
+      {
+        "id": "Basic.extension:canFilterBy.value[x]",
+        "path": "Basic.extension.value[x]",
+        "max": "0"
+      },
+      {
+        "id": "Basic.code",
+        "path": "Basic.code",
+        "patternCodeableConcept": {
+          "coding": [
+            {
+              "system": "http://hl7.org/fhir/fhir-types",
+              "code": "SubscriptionTopic"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

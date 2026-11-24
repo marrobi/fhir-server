@@ -21,9 +21,11 @@ using Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry;
+using Microsoft.Health.Fhir.Core.Logging.Metrics;
 using Microsoft.Health.Fhir.Core.Models;
 using Microsoft.Health.Fhir.Tests.Common;
 using Microsoft.Health.Test.Utilities;
+using NSubstitute;
 using Xunit;
 using Task = System.Threading.Tasks.Task;
 
@@ -43,6 +45,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         private readonly SubscriptionsConfiguration _configuration = new() { Enabled = true, MaxDeliveryAttempts = 3, RetryBaseDelaySeconds = 0, RegistryRefreshIntervalSeconds = 0 };
         private readonly SubscriptionAuthorizer _authorizer;
         private readonly SubscriptionDeliveryService _service;
+        private readonly ISubscriptionMetricHandler _metrics = Substitute.For<ISubscriptionMetricHandler>();
 
         public SubscriptionDeliveryServiceTests(SubscriptionTestFixture fixture)
         {
@@ -60,7 +63,8 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
                 _authorizer,
                 [_channel],
                 new FhirRequestContextAccessor(),
-                NullLogger<SubscriptionDeliveryService>.Instance);
+                NullLogger<SubscriptionDeliveryService>.Instance,
+                _metrics);
 
             _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
         }
@@ -78,6 +82,8 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             Assert.Contains("handshake", Assert.Single(_channel.Payloads), StringComparison.Ordinal);
             Assert.Equal(SubscriptionStatusCode.Active, Status("s1"));
             Assert.Equal(_store.Visibility, _store.States["s1"].ActivationTransactionId);
+            _metrics.Received(1).NotificationSent(nameof(SubscriptionNotificationType.Handshake), true, Arg.Any<TimeSpan>());
+            _metrics.Received(1).StatusChanged(nameof(SubscriptionStatusCode.Active));
         }
 
         [Fact]
@@ -91,6 +97,8 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             Assert.Equal(SubscriptionStatusCode.Error, Status("s1"));
             Assert.Null(_store.States["s1"].ActivationTransactionId);
             Assert.Contains("HTTP 500", _store.States["s1"].Error, StringComparison.Ordinal);
+            _metrics.Received(1).NotificationSent(nameof(SubscriptionNotificationType.Handshake), false, Arg.Any<TimeSpan>());
+            _metrics.Received(1).StatusChanged(nameof(SubscriptionStatusCode.Error));
         }
 
         [Fact]

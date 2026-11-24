@@ -94,6 +94,22 @@ namespace Microsoft.Health.Fhir.Core.Configs
         public int MaxHistoryCleanupHoldHours { get; set; } = 24;
 
         /// <summary>
+        /// Gets or sets the committed-change source the event pump reads. Defaults to <see cref="SubscriptionEventSource.Transactions"/>.
+        /// </summary>
+        public SubscriptionEventSource EventSource { get; set; } = SubscriptionEventSource.Transactions;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether versions that are written directly as history notify subscribers. Off by default.
+        /// <c>$import</c> writes earlier versions this way when it loads a resource's history; they describe past changes.
+        /// </summary>
+        public bool NotifyHistoricalVersions { get; set; }
+
+        /// <summary>
+        /// Gets or sets how topics on resource types with the <c>no-version</c> versioning policy are treated.
+        /// </summary>
+        public UnversionedResourceTypePolicy UnversionedResourceTypes { get; set; } = UnversionedResourceTypePolicy.AllowWithGaps;
+
+        /// <summary>
         /// Gets or sets a value indicating whether plain HTTP endpoints are allowed. Intended for local development only.
         /// </summary>
         public bool AllowHttpEndpoints { get; set; }

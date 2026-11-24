@@ -171,6 +171,77 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Storage
         }
 
         /// <summary>
+        /// Returns, for each resource version, the transaction that wrote it and whether it was already superseded when written:
+        /// a later version of the same resource was written by the same or an earlier transaction, as <c>$import</c> does when it
+        /// loads history. Versions that no longer exist are omitted.
+        /// </summary>
+        /// <param name="keys">The resource versions.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The write information by version.</returns>
+        internal async Task<IReadOnlyDictionary<(short ResourceTypeId, string ResourceId, int Version), (long? TransactionId, bool WrittenAsHistory)>> GetVersionWriteInfoAsync(
+            IReadOnlyCollection<(short ResourceTypeId, string ResourceId, int Version)> keys,
+            CancellationToken cancellationToken)
+        {
+            var result = new Dictionary<(short, string, int), (long?, bool)>();
+            if (keys == null || keys.Count == 0)
+            {
+                return result;
+            }
+
+            // Both lookups seek IX_Resource_ResourceTypeId_ResourceId_Version; TransactionId comes from the clustered key lookup.
+            await using var cmd = new SqlCommand()
+            {
+                CommandText = @"
+SELECT R.ResourceTypeId
+      ,R.ResourceId
+      ,R.Version
+      ,R.TransactionId
+      ,WrittenAsHistory = CASE WHEN R.TransactionId IS NOT NULL
+                                    AND EXISTS (SELECT * FROM dbo.Resource L
+                                                  WHERE L.ResourceTypeId = R.ResourceTypeId AND L.ResourceId = R.ResourceId
+                                                    AND L.Version > R.Version AND L.TransactionId <= R.TransactionId)
+                               THEN convert(bit, 1) ELSE convert(bit, 0) END
+  FROM @ResourceKeys K
+       JOIN dbo.Resource R ON R.ResourceTypeId = K.ResourceTypeId AND R.ResourceId = K.ResourceId AND R.Version = K.Version",
+                CommandType = CommandType.Text,
+            };
+            new ResourceKeyListTableValuedParameterDefinition("@ResourceKeys").AddParameter(cmd.Parameters, keys.Distinct().Select(k => new ResourceKeyListRow(k.ResourceTypeId, k.ResourceId, k.Version)));
+            IReadOnlyList<((short, string, int) Key, (long?, bool) Value)> rows = await cmd.ExecuteReaderAsync(
+                _sqlRetryService,
+                reader => ((reader.GetInt16(0), reader.GetString(1), reader.GetInt32(2)), (reader.IsDBNull(3) ? (long?)null : reader.GetInt64(3), reader.GetBoolean(4))),
+                _logger,
+                cancellationToken);
+            foreach (((short, string, int) key, (long?, bool) value) in rows)
+            {
+                result[key] = value;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Returns the highest <c>ResourceChangeData</c> id recorded before <paramref name="before"/>, or the highest id overall when
+        /// <paramref name="before"/> is null; zero when there is none.
+        /// </summary>
+        /// <param name="before">The exclusive upper bound on the change timestamp, or null.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The change id.</returns>
+        internal async Task<long> GetResourceChangeDataIdBeforeAsync(DateTime? before, CancellationToken cancellationToken)
+        {
+            // Separate statements keep the timestamp predicate sargable, so it prunes partitions of the timestamp-partitioned table.
+            await using SqlCommand cmd = before.HasValue
+                ? new SqlCommand("SELECT isnull(max(Id), 0) FROM dbo.ResourceChangeData WHERE Timestamp < @Before")
+                : new SqlCommand("SELECT isnull(max(Id), 0) FROM dbo.ResourceChangeData");
+            if (before.HasValue)
+            {
+                cmd.Parameters.Add(new SqlParameter("@Before", SqlDbType.DateTime2) { Value = before.Value });
+            }
+
+            object value = await cmd.ExecuteScalarAsync(_sqlRetryService, _logger, cancellationToken);
+            return value == null || value == DBNull.Value ? 0 : Convert.ToInt64(value, CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
         /// Returns true when the raw resource content has been removed (an invisible history row).
         /// </summary>
         internal static bool IsInvisible(ResourceWrapper wrapper) => wrapper?.RawResource?.Data == _invisibleResource;

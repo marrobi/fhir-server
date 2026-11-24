@@ -33,6 +33,13 @@ after an endpoint change, and that deleting the subscription stops notifications
 To try it by hand, see [Subscriptions.http](../../docs/rest/Subscriptions.http) and use `http://webhook:8080/<path>` as
 the subscription endpoint. View what was received with `curl http://localhost:8081/notifications`.
 
+To try the change-feed event source instead of `Transactions`, add these to the `fhir-api` environment (see [Event source](../../docs/Subscriptions.md#event-source)):
+
+```yaml
+      FhirServer__CoreFeatures__SupportsResourceChangeCapture: "true"
+      FhirServer__Subscriptions__EventSource: "ResourceChangeData"
+```
+
 ```bash
 docker compose down -v
 ```

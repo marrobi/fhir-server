@@ -15,6 +15,7 @@ using Microsoft.Health.Fhir.Core.Features.Subscriptions.Channels;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
 using Microsoft.Health.Fhir.Core.Models;
+using Microsoft.Health.Fhir.ValueSets;
 
 namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
 {
@@ -42,6 +43,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         private readonly SubscriptionsConfiguration _configuration;
         private readonly IModelInfoProvider _modelInfoProvider;
         private readonly HashSet<string> _channelTypes;
+        private readonly VersioningConfiguration _versioning;
 
         public SubscriptionValidator(
             InMemorySearchEvaluator searchEvaluator,
@@ -49,7 +51,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             SubscriptionEndpointPolicy endpointPolicy,
             IOptions<SubscriptionsConfiguration> configuration,
             IModelInfoProvider modelInfoProvider,
-            IEnumerable<ISubscriptionChannel> channels)
+            IEnumerable<ISubscriptionChannel> channels,
+            IOptions<CoreFeatureConfiguration> coreFeatures = null)
         {
             _searchEvaluator = EnsureArg.IsNotNull(searchEvaluator, nameof(searchEvaluator));
             _fhirPathEvaluator = EnsureArg.IsNotNull(fhirPathEvaluator, nameof(fhirPathEvaluator));
@@ -57,6 +60,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             _configuration = EnsureArg.IsNotNull(configuration?.Value, nameof(configuration));
             _modelInfoProvider = EnsureArg.IsNotNull(modelInfoProvider, nameof(modelInfoProvider));
             _channelTypes = new HashSet<string>(EnsureArg.IsNotNull(channels, nameof(channels)).Select(c => c.ChannelType), StringComparer.Ordinal);
+            _versioning = coreFeatures?.Value?.Versioning;
         }
 
         /// <summary>
@@ -98,6 +102,11 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
                     // Topics on Subscription could be triggered by the server's own status writes.
                     errors.Add(Core.Resources.SubscriptionTopicOnSubscriptionNotSupported);
                     continue;
+                }
+
+                if (_configuration.UnversionedResourceTypes == UnversionedResourceTypePolicy.RequireHistory && !KeepsHistory(type))
+                {
+                    errors.Add(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionTopicRequiresHistory, trigger.Resource));
                 }
 
                 if (trigger.QueryCriteria != null)
@@ -292,6 +301,24 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             {
                 errors.Add(ex.Message);
             }
+        }
+
+        private bool KeepsHistory(string type)
+        {
+            if (_versioning == null)
+            {
+                return true;
+            }
+
+            static bool IsUnversioned(string policy) => string.Equals(policy, ResourceVersionPolicy.NoVersion, StringComparison.OrdinalIgnoreCase);
+
+            // A base-type trigger covers every resource type, so any unversioned type breaks the guarantee.
+            if (BaseResourceTypes.Contains(type))
+            {
+                return !IsUnversioned(_versioning.Default) && !_versioning.ResourceTypeOverrides.Values.Any(IsUnversioned);
+            }
+
+            return !IsUnversioned(_versioning.ResourceTypeOverrides.TryGetValue(type, out string policy) ? policy : _versioning.Default);
         }
 
         private bool IsResourceType(string type) =>

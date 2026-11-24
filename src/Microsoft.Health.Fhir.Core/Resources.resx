@@ -1206,4 +1206,7 @@
   <data name="SubscriptionsRequireSqlServer" xml:space="preserve">
     <value>Topic-based subscriptions require the SQL Server data store.</value>
   </data>
+  <data name="SubscriptionTopicRequiresHistory" xml:space="preserve">
+    <value>The subscription topic triggers on '{0}', which does not keep history (versioning policy no-version). This server requires resource history for subscription topics.</value>
+  </data>
 </root>

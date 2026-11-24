@@ -7,6 +7,8 @@ using System.Collections.Generic;
 using System.Linq;
 using Hl7.Fhir.Model;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Microsoft.Health.Fhir.Core.Configs;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Authorization;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
@@ -22,10 +24,12 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
     [Trait(Traits.Category, Categories.Subscriptions)]
     public class SubscriptionEventProcessorTests : IClassFixture<SubscriptionTestFixture>
     {
+        private readonly SubscriptionTestFixture _fixture;
         private readonly SubscriptionEventProcessor _processor;
 
         public SubscriptionEventProcessorTests(SubscriptionTestFixture fixture)
         {
+            _fixture = fixture;
             _processor = new SubscriptionEventProcessor(fixture.Matcher, fixture.CreateAuthorizer(), NullLogger<SubscriptionEventProcessor>.Instance);
         }
 
@@ -44,6 +48,28 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             SubscriptionEventCandidate single = Assert.Single(events);
             Assert.Equal(101, single.Change.TransactionId);
             Assert.Equal(SubscriptionEventStatus.Pending, single.Status);
+        }
+
+        [Theory]
+        [InlineData(false, 0)]
+        [InlineData(true, 1)]
+        public void GivenAVersionWrittenAsHistory_WhenProcessed_ThenAnEventIsCreatedOnlyWhenHistoricalVersionsNotify(bool notifyHistoricalVersions, int expectedEvents)
+        {
+            // Arrange
+            var processor = new SubscriptionEventProcessor(
+                _fixture.Matcher,
+                _fixture.CreateAuthorizer(),
+                NullLogger<SubscriptionEventProcessor>.Instance,
+                Options.Create(new SubscriptionsConfiguration { NotifyHistoricalVersions = notifyHistoricalVersions }));
+            Observation observation = InMemorySearchEvaluatorTests.CreateObservation();
+            observation.Subject = new ResourceReference("Patient/p1");
+            ResourceChange imported = SubscriptionTestFixture.Change(observation, transactionId: 101, writtenAsHistory: true);
+
+            // Act
+            IReadOnlyList<SubscriptionEventCandidate> events = processor.Process([imported], [Subscription("s1")]);
+
+            // Assert
+            Assert.Equal(expectedEvents, events.Count);
         }
 
         [Fact]

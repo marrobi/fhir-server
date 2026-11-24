@@ -187,14 +187,28 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
         }
 
         /// <summary>
-        /// Appends matched events and advances the pump cursor to <paramref name="cursorTransactionId"/> in one transaction.
+        /// Appends matched events and advances the <c>Transactions</c> pump cursor to <paramref name="cursorTransactionId"/> in one transaction.
         /// </summary>
         /// <param name="events">The events in change order.</param>
         /// <param name="cursorTransactionId">The last transaction covered by <paramref name="events"/>.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns>A task.</returns>
-        public async Task EnqueueAsync(IReadOnlyList<SubscriptionEventCandidate> events, long cursorTransactionId, CancellationToken cancellationToken)
+        public Task EnqueueAsync(IReadOnlyList<SubscriptionEventCandidate> events, long cursorTransactionId, CancellationToken cancellationToken)
         {
+            return EnqueueAsync(events, CursorId, cursorTransactionId, cancellationToken);
+        }
+
+        /// <summary>
+        /// Appends matched events and advances the named pump cursor to <paramref name="cursorPosition"/> in one transaction.
+        /// </summary>
+        /// <param name="events">The events in change order.</param>
+        /// <param name="cursorId">The cursor of the event source the events came from.</param>
+        /// <param name="cursorPosition">The last source position covered by <paramref name="events"/>.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>A task.</returns>
+        public async Task EnqueueAsync(IReadOnlyList<SubscriptionEventCandidate> events, string cursorId, long cursorPosition, CancellationToken cancellationToken)
+        {
+            EnsureArg.IsNotNullOrWhiteSpace(cursorId, nameof(cursorId));
             EnsureArg.IsNotNull(events, nameof(events));
 
             int ordinal = 0;
@@ -220,20 +234,33 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
 
             await using SqlCommand cmd = Procedure("dbo.EnqueueSubscriptionEvents");
             new SubscriptionEventListTableValuedParameterDefinition("@Events").AddParameter(cmd.Parameters, rows);
-            cmd.Parameters.AddWithValue("@CursorId", CursorId);
-            cmd.Parameters.AddWithValue("@CursorTransactionId", cursorTransactionId);
+            cmd.Parameters.AddWithValue("@CursorId", cursorId);
+            cmd.Parameters.AddWithValue("@CursorTransactionId", cursorPosition);
             await cmd.ExecuteNonQueryAsync(_sqlRetryService, _logger, cancellationToken);
         }
 
         /// <summary>
-        /// Reads the pump cursor, or null when the pump has never run.
+        /// Reads the <c>Transactions</c> pump cursor, or null when the pump has never run.
         /// </summary>
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns>The cursor.</returns>
-        public async Task<long?> GetCursorAsync(CancellationToken cancellationToken)
+        public Task<long?> GetCursorAsync(CancellationToken cancellationToken)
         {
+            return GetCursorAsync(CursorId, cancellationToken);
+        }
+
+        /// <summary>
+        /// Reads the named pump cursor, or null when the pump has never run for that event source.
+        /// </summary>
+        /// <param name="cursorId">The cursor of an event source.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The cursor.</returns>
+        public async Task<long?> GetCursorAsync(string cursorId, CancellationToken cancellationToken)
+        {
+            EnsureArg.IsNotNullOrWhiteSpace(cursorId, nameof(cursorId));
+
             await using var cmd = new SqlCommand("SELECT Bigint FROM dbo.Parameters WHERE Id = @Id");
-            cmd.Parameters.AddWithValue("@Id", CursorId);
+            cmd.Parameters.AddWithValue("@Id", cursorId);
             object value = await cmd.ExecuteScalarAsync(_sqlRetryService, _logger, cancellationToken);
             return value == null || value == DBNull.Value ? null : (long)value;
         }

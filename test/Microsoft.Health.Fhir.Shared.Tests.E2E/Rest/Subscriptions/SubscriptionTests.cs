@@ -275,7 +275,27 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
 #if R4 || R4B
             Assert.Contains(subscription["supportedProfile"], p => (string)p == SubscriptionsBackport.SubscriptionProfile);
 #endif
+#if R4 && !R4B
+            JToken basic = capabilities["rest"][0]["resource"].Single(r => (string)r["type"] == "Basic");
+            Assert.Contains(basic["supportedProfile"], p => (string)p == SubscriptionsBackport.R4TopicProfile);
+#endif
         }
+
+#if R4 && !R4B
+        [Fact]
+        public async Task GivenTheBuiltInTopicProfile_WhenATopicIsValidatedAgainstIt_ThenNoErrorsAreReported()
+        {
+            Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires an in-proc server with subscriptions enabled.");
+
+            (HttpStatusCode code, JObject outcome) = await SendAsync(
+                HttpMethod.Post,
+                $"Basic/$validate?profile={Uri.EscapeDataString(SubscriptionsBackport.R4TopicProfile)}",
+                SubscriptionResources.Topic(NewTopicUrl(), Guid.NewGuid().ToString("N")));
+
+            AssertStatus(HttpStatusCode.OK, code, outcome);
+            Assert.DoesNotContain(outcome["issue"], i => (string)i["severity"] is "error" or "fatal");
+        }
+#endif
 
         private static void AssertStatus(HttpStatusCode expected, HttpStatusCode actual, JObject body)
         {

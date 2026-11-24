@@ -17,10 +17,12 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
     [Trait(Traits.Category, Categories.Subscriptions)]
     public class SubscriptionValidatorTests : IClassFixture<SubscriptionTestFixture>
     {
+        private readonly SubscriptionTestFixture _fixture;
         private readonly SubscriptionValidator _validator;
 
         public SubscriptionValidatorTests(SubscriptionTestFixture fixture)
         {
+            _fixture = fixture;
             _validator = fixture.CreateValidator(new SubscriptionsConfiguration { MinHeartbeatPeriodSeconds = 30, MaxTimeoutSeconds = 60 });
         }
 
@@ -28,6 +30,31 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         public void GivenAValidTopic_WhenValidated_ThenThereAreNoErrors()
         {
             Assert.Empty(_validator.ValidateTopic(ValidTopic()));
+        }
+
+        [Theory]
+        [InlineData(UnversionedResourceTypePolicy.AllowWithGaps, "Encounter", true)]
+        [InlineData(UnversionedResourceTypePolicy.RequireHistory, "Encounter", false)]
+        [InlineData(UnversionedResourceTypePolicy.RequireHistory, "Observation", true)]
+        [InlineData(UnversionedResourceTypePolicy.RequireHistory, "Resource", false)]
+        public void GivenAnUnversionedResourceType_WhenATopicTriggersOnIt_ThenThePolicyDecidesWhetherItIsValid(UnversionedResourceTypePolicy policy, string trigger, bool valid)
+        {
+            // Arrange: Encounter does not keep history; everything else does.
+            var coreFeatures = new CoreFeatureConfiguration();
+            coreFeatures.Versioning.ResourceTypeOverrides["Encounter"] = "no-version";
+            SubscriptionValidator validator = _fixture.CreateValidator(new SubscriptionsConfiguration { UnversionedResourceTypes = policy }, coreFeatures);
+            var topic = new SubscriptionTopicInfo
+            {
+                Canonical = "http://example.org/topic/any",
+                Status = "active",
+                ResourceTriggers = [new TopicResourceTrigger { Resource = trigger, FhirPathCriteria = "true" }],
+            };
+
+            // Act
+            IReadOnlyList<string> errors = validator.ValidateTopic(topic);
+
+            // Assert
+            Assert.Equal(valid, errors.Count == 0);
         }
 
         [Fact]

@@ -24,7 +24,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
     /// <summary>
     /// Declares subscription support in the CapabilityStatement: the Backport server CapabilityStatement in <c>instantiates</c>
     /// and the Backport subscription profile in <c>supportedProfile</c> (R4, R4B), the <c>$status</c> operation, and on R4 the
-    /// topics known when the statement is built, through the topic-canonical extension.
+    /// topics known when the statement is built, through the topic-canonical extension, and the topic profile on <c>Basic</c>.
     /// </summary>
     public sealed class SubscriptionsCapabilityProvider : IProvideCapability, IInstantiateCapability
     {
@@ -71,6 +71,12 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
                     // Storage may not be ready when the statement is first built; topics are also discoverable by search.
                     _logger.LogInformation(ex, "Subscription topics could not be listed in the CapabilityStatement.");
                 }
+            }
+
+            if (_modelInfoProvider.Version == FhirSpecification.R4)
+            {
+                // R4 topics are Basic resources; declare the profile that describes them.
+                builder.ApplyToResource(KnownResourceTypes.Basic, resource => resource.SupportedProfile.Add(SubscriptionsBackport.R4TopicProfile));
             }
 
             builder.ApplyToResource(KnownResourceTypes.Subscription, resource =>

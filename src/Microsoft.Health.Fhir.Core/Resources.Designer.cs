@@ -3085,5 +3085,14 @@ namespace Microsoft.Health.Fhir.Core {
                 return ResourceManager.GetString("SubscriptionsRequireSqlServer", resourceCulture);
             }
         }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription topic triggers on &#x27;{0}&#x27;, which does not keep history (versioning policy no-version). This server requires resource history for subscription topics..
+        /// </summary>
+        internal static string SubscriptionTopicRequiresHistory {
+            get {
+                return ResourceManager.GetString("SubscriptionTopicRequiresHistory", resourceCulture);
+            }
+        }
     }
 }

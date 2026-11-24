@@ -255,7 +255,7 @@ Two existing sources can feed the matcher. Both are read-only uses of existing d
 | Coverage | Create, update, soft delete, `$import`, bulk, including historical versions loaded by `$import` | Same, except historical versions (only `IsHistory = 0` rows are captured) |
 | Main drawback | Head-of-line latency during long transactions | Lock contention and coupling to the managed events configuration |
 
-The choice between the two is open for product group guidance, and is recorded in ADR-2611 before it is accepted. Two related product questions should be answered with it: should historical versions loaded by `$import` produce notifications, and is change capture (with its retention) a supported dependency for this feature?
+The choice between the two is open for product group guidance, and is recorded in ADR-2611 before it is accepted. Two related product questions should be answered with it: should historical versions loaded by `$import` produce notifications, and is change capture (with its retention) a supported dependency for this feature? The implementation makes each of these a setting (section 12).
 
 ### Design decisions (to be settled in an ADR)
 
@@ -345,12 +345,12 @@ The choice between the two is open for product group guidance, and is recorded i
 
 ## 10. Risks and open questions
 
-- **Event source.** `Transactions` (preferred) or the `ResourceChangeData` change feed (section 6). Awaiting product group guidance.
+- **Event source.** `Transactions` (preferred) or the `ResourceChangeData` change feed (section 6). Both are implemented and `EventSource` selects one; awaiting product group guidance on the default.
 - **Throughput.** Matching cost is roughly *(changed resources) × (active subscriptions)*, and matching runs in a single leased pump. Index subscriptions by resource type and interaction, parallelise evaluation *within* a batch (committing in order), and make the number of active subscriptions configurable with a cap. If one pump is insufficient, partitioning by resource type is the fallback; the phase 0 benchmark decides.
 - **Head-of-line latency.** Long `$import` batches or stalled transactions delay all notifications (section 5). Decide the latency target and whether `$import` should opt out of notifications per operation.
 - **Write amplification.** Each match adds a `SubscriptionEvents` row; the retention watchdog is in the v1 gate.
-- **History retention.** Gating `InvisibleHistoryCleanupWatchdog` on the cursor delays cleanup while the pump is behind. Define a maximum lag after which events are recorded as `Unevaluable` instead of blocking cleanup. Separately, decide whether subscribed resource types must keep history (design decision 3).
-- **Authorization snapshot limits.** Snapshot-based checks cannot see identity-provider revocation. Decide the default maximum subscription lifetime, and whether certain roles may hold longer-lived subscriptions.
+- **History retention.** Gating `InvisibleHistoryCleanupWatchdog` on the cursor delays cleanup while the pump is behind. Define a maximum lag after which events are recorded as `Unevaluable` instead of blocking cleanup. Separately, decide whether subscribed resource types must keep history (design decision 3); `UnversionedResourceTypes` implements both answers.
+- **Authorization snapshot limits.** Snapshot-based checks cannot see identity-provider revocation. Decide the default maximum subscription lifetime (`MaxLifetimeDays`, currently 365), and whether certain roles may hold longer-lived subscriptions.
 - **Header secrets on read.** The spec says `Subscription` is not secret storage. Decide whether to redact `parameter`/`channel.header` values for readers without write permission.
 - **Topic deletion and updates with active subscriptions.** Decide whether to reject topic deletion while subscriptions reference the topic, and whether trigger changes require subscriptions to be re-requested.
 
@@ -394,7 +394,11 @@ The implementation is on the `feature/fhir-subscriptions` branch. Where it settl
 
 - **Storage.** Besides `SubscriptionEvents`, a `SubscriptionStates` table (schema version 123) holds each subscription's activation grant, content hash, activation watermark, last event number, error text and delivery lease. A changed content hash clears the activation, so the next handshake needs a new grant.
 - **Delivery.** Delivery is a hosted background service that takes a per-subscription lease in `SubscriptionStates`, rather than a `TaskManagement` job type. This keeps delivery single-flight per subscription across instances without one job per notification.
-- **Event source.** The pump reads `Transactions` directly. `ITransactionEventSource` is not yet extracted; it would be if the product group chooses the change feed.
+- **Event source.** The pump reads through `ITransactionEventSource`, with a `Transactions` source and a `ResourceChangeData` source; `EventSource` selects one (default `Transactions`). Each source keeps its own cursor in `dbo.Parameters`. Change-feed records are mapped back to the writing transaction, so the activation watermark and the outbox key are the same for both sources and switching sources does not number a change twice. The change-feed source refuses to run unless change capture is enabled.
+- **Historical versions.** A version is *written as history* when a later version of the resource was already written by the same or an earlier transaction, as `$import` does when it loads history. Such versions notify only when `NotifyHistoricalVersions` is on (default off). The change feed does not record them.
+- **Unversioned types.** `UnversionedResourceTypes` is `AllowWithGaps` (default: unevaluable gaps, as above) or `RequireHistory` (topics on `no-version` types are rejected, including base-type triggers while any type is `no-version`).
+- **R4 topic profile.** The `Basic` topic StructureDefinition ships in the R4 server, is listed in `Basic.supportedProfile`, and is resolved by `$validate` without being uploaded.
+- **Metrics.** Pump progress and lag, events by outcome, notification attempts and duration by type and outcome, and server status changes, on the `FhirServer` meter.
 - **Pump start.** On its first run the pump starts its cursor at the visibility watermark, or at the earliest existing activation watermark if that is lower, so a subscription activated before the pump first runs receives every later change.
 - **History.** Instead of gating `InvisibleHistoryCleanupWatchdog` on the cursor, the implementation keeps invisible history for at least `MaxHistoryCleanupHoldHours` while the feature is on. Versions removed earlier are recorded as `Unevaluable`. Tests confirm that `no-version` types lose earlier versions as described in decision 3.
 - **Limits.** Defaults are a 365-day maximum lifetime, 1,000 subscriptions in `requested`, `active` or `error`, 5 delivery attempts and a 60-second minimum heartbeat. All are configurable; see [Subscriptions](../../Subscriptions.md).

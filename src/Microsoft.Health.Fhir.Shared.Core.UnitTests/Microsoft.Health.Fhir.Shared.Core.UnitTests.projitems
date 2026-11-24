@@ -92,6 +92,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionQueryParserTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionResourceBehaviorTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionTestFixture.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionTopicProfileTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionValidatorTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Validation\ProfileValidatorTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Validation\ResourceProfileValidatorTests.cs" />

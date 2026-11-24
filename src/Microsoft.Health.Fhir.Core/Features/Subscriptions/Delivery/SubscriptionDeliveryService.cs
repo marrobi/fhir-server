@@ -25,6 +25,7 @@ using Microsoft.Health.Fhir.Core.Features.Subscriptions.Channels;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry;
+using Microsoft.Health.Fhir.Core.Logging.Metrics;
 using Microsoft.Health.Fhir.Core.Messages.Search;
 using Microsoft.Health.Fhir.Core.Models;
 
@@ -50,6 +51,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
         private readonly Dictionary<string, ISubscriptionChannel> _channels;
         private readonly RequestContextAccessor<IFhirRequestContext> _requestContextAccessor;
         private readonly ILogger<SubscriptionDeliveryService> _logger;
+        private readonly ISubscriptionMetricHandler _metrics;
         private readonly string _worker = $"{Environment.MachineName}.{Environment.ProcessId}.{Guid.NewGuid():N}";
         private volatile bool _storageReady;
 
@@ -64,7 +66,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
             SubscriptionAuthorizer authorizer,
             IEnumerable<ISubscriptionChannel> channels,
             RequestContextAccessor<IFhirRequestContext> requestContextAccessor,
-            ILogger<SubscriptionDeliveryService> logger)
+            ILogger<SubscriptionDeliveryService> logger,
+            ISubscriptionMetricHandler metrics = null)
         {
             _configuration = EnsureArg.IsNotNull(configuration?.Value, nameof(configuration));
             _registry = EnsureArg.IsNotNull(registry, nameof(registry));
@@ -77,6 +80,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
             _channels = EnsureArg.IsNotNull(channels, nameof(channels)).ToDictionary(c => c.ChannelType, StringComparer.Ordinal);
             _requestContextAccessor = EnsureArg.IsNotNull(requestContextAccessor, nameof(requestContextAccessor));
             _logger = EnsureArg.IsNotNull(logger, nameof(logger));
+            _metrics = metrics;
         }
 
         public Task HandleAsync(SearchParametersInitializedNotification notification, CancellationToken cancellationToken)
@@ -448,7 +452,10 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
             }
 
             string payload = _notificationFactory.Serialize(_notificationFactory.CreateNotification(request), subscription.Info.ContentType);
-            return await channel.SendAsync(subscription.Info, payload, cancellationToken);
+            long started = Stopwatch.GetTimestamp();
+            ChannelDeliveryResult result = await channel.SendAsync(subscription.Info, payload, cancellationToken);
+            _metrics?.NotificationSent(request.Type.ToString(), result.Succeeded, Stopwatch.GetElapsedTime(started));
+            return result;
         }
 
         private async Task DeactivateAsync(string subscriptionId, SubscriptionState state, CancellationToken cancellationToken)
@@ -468,6 +475,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
 
             if (await _statusWriter.SetStatusAsync(info.Id, info.VersionId, status, error, cancellationToken))
             {
+                _metrics?.StatusChanged(status.ToString());
                 await _store.SetErrorAsync(info.Id, error, cancellationToken);
                 _registry.Invalidate();
             }

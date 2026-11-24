@@ -30,6 +30,12 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
         public DateTimeOffset LastModified { get; init; }
 
         /// <summary>
+        /// Gets a value indicating whether the version was already superseded when it was written: a later version of the
+        /// resource was written by the same or an earlier transaction. <c>$import</c> loads a resource's history this way.
+        /// </summary>
+        public bool IsWrittenAsHistory { get; init; }
+
+        /// <summary>
         /// Gets the written version, or null when its content is no longer available (for example, removed by history cleanup).
         /// </summary>
         public ResourceSnapshot Current { get; init; }

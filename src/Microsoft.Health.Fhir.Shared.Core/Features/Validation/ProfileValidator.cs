@@ -15,6 +15,7 @@ using Hl7.Fhir.Validation;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Health.Fhir.Core.Configs;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions;
 using Microsoft.Health.Fhir.Core.Models;
 
 namespace Microsoft.Health.Fhir.Core.Features.Validation
@@ -54,7 +55,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Validation
                     cacheDuration,
                     _maxExpansionSize);
 
-                _resolver = new MultiResolver(new CachedResolver(ZipSource.CreateValidationSource(), cacheDuration), profilesResolver);
+                _resolver = new MultiResolver(new CachedResolver(ZipSource.CreateValidationSource(), cacheDuration), SubscriptionTopicProfile.CreateResolver(), profilesResolver);
             }
             catch (Exception)
             {

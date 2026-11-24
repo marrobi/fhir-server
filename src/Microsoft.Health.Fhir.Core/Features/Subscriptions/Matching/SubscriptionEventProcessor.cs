@@ -8,6 +8,8 @@ using System.Collections.Generic;
 using System.Linq;
 using EnsureThat;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Microsoft.Health.Fhir.Core.Configs;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Authorization;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry;
@@ -23,12 +25,14 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
         private readonly SubscriptionMatcher _matcher;
         private readonly SubscriptionAuthorizer _authorizer;
         private readonly ILogger<SubscriptionEventProcessor> _logger;
+        private readonly bool _notifyHistoricalVersions;
 
-        public SubscriptionEventProcessor(SubscriptionMatcher matcher, SubscriptionAuthorizer authorizer, ILogger<SubscriptionEventProcessor> logger)
+        public SubscriptionEventProcessor(SubscriptionMatcher matcher, SubscriptionAuthorizer authorizer, ILogger<SubscriptionEventProcessor> logger, IOptions<SubscriptionsConfiguration> configuration = null)
         {
             _matcher = EnsureArg.IsNotNull(matcher, nameof(matcher));
             _authorizer = EnsureArg.IsNotNull(authorizer, nameof(authorizer));
             _logger = EnsureArg.IsNotNull(logger, nameof(logger));
+            _notifyHistoricalVersions = configuration?.Value?.NotifyHistoricalVersions ?? false;
         }
 
         /// <summary>
@@ -61,6 +65,11 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
             {
                 // Writes to Subscription resources, including the server's own status updates, never trigger notifications.
                 if (string.Equals(change.ResourceType, KnownResourceTypes.Subscription, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (change.IsWrittenAsHistory && !_notifyHistoricalVersions)
                 {
                     continue;
                 }

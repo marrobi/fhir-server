@@ -31,7 +31,27 @@ The feature is **off by default** and needs the **SQL Server** data store. When 
 
 ### History requirement
 
-The pump matches the exact versions written, including earlier versions when a resource is updated several times before the pump reads them. That needs the resource type to keep history (`versioned` or `versioned-update`). For `no-version` types, a version replaced before the pump reads it cannot be evaluated: it is counted as unevaluable, reported by `$status`, and not sent. While subscriptions are enabled, invisible history is kept for at least `MaxHistoryCleanupHoldHours`.
+The pump matches the exact versions written, including earlier versions when a resource is updated several times before the pump reads them. That needs the resource type to keep history (`versioned` or `versioned-update`). For `no-version` types, `UnversionedResourceTypes` decides:
+
+- `AllowWithGaps` (default): topics may trigger on them. A version replaced before the pump reads it cannot be evaluated: it is counted as unevaluable, reported by `$status`, and not sent, so subscribers see a gap in event numbers.
+- `RequireHistory`: topics that trigger on a `no-version` type (or on `Resource`/`DomainResource` while any type is `no-version`) are rejected, so every notification is matched against the exact version written. Existing topics are re-checked when the registry loads them, and their subscriptions move to `error`.
+
+While subscriptions are enabled, invisible history is kept for at least `MaxHistoryCleanupHoldHours`.
+
+### Historical versions from `$import`
+
+`$import` can load a resource's history: versions older than the current one are stored directly as history. Those versions describe past changes, so by default they do not notify. Set `NotifyHistoricalVersions` to `true` to treat them like any other write. A version counts as written as history when a later version of the same resource was already written by the same or an earlier transaction.
+
+### Event source
+
+The pump reads committed changes through an event source, selected by `EventSource`:
+
+| Source | Reads | Trade-offs |
+|--------|-------|------------|
+| `Transactions` (default) | `dbo.Transactions` up to the visibility watermark, then every version each transaction wrote | Covers every write path, including `$import` and bulk operations. Notifications wait for the oldest incomplete transaction. |
+| `ResourceChangeData` | The `ResourceChangeData` change feed | Needs `CoreFeatures:SupportsResourceChangeCapture`; without it the pump logs an error and does not run. Covers only what the change feed records (it omits versions written as history). Its reader takes a table lock that can block concurrent writes. The feed itself is only read, never changed. |
+
+Each source keeps its own cursor. Switching sources is safe: the new source starts no later than the earliest activation, and changes it reads again are not numbered twice.
 
 ## Configuration
 
@@ -52,11 +72,37 @@ Settings are under `FhirServer:Subscriptions`.
 | `RetryBaseDelaySeconds` | `2` | Base for exponential retry back-off. |
 | `EventRetentionDays` | `7` | How long delivered events are kept. Pending events are kept until delivered or the subscription is deleted. |
 | `MaxHistoryCleanupHoldHours` | `24` | Minimum invisible-history retention while subscriptions are enabled. |
-| `PumpPeriodSeconds` / `PumpTransactionBatchSize` | `1` / `100` | Pump tick and batch size. |
+| `PumpPeriodSeconds` / `PumpTransactionBatchSize` | `1` / `100` | Pump tick, and the number of transactions or change records per batch. |
+| `EventSource` | `Transactions` | Where the pump reads committed changes: `Transactions` or `ResourceChangeData`. See [Event source](#event-source). |
+| `NotifyHistoricalVersions` | `false` | Whether versions written directly as history, such as `$import` loading earlier versions, notify. |
+| `UnversionedResourceTypes` | `AllowWithGaps` | `AllowWithGaps` or `RequireHistory` for topics on `no-version` resource types. See [History requirement](#history-requirement). |
 | `RegistryRefreshIntervalSeconds` | `10` | How often each instance reloads subscriptions and topics. |
 | `DeliveryPollingIntervalSeconds` / `DeliveryLeaseSeconds` | `1` / `60` | Delivery polling and the per-subscription lease that keeps delivery ordered across instances. |
 
 Endpoints must be absolute `https://` URLs with no user information. Every resolved address is checked again when connecting, so DNS changes cannot redirect notifications to a blocked address. Headers that control the HTTP connection (`Host`, `Content-Type`, `Content-Length`, `Connection` and similar) cannot be set on a subscription.
+
+The defaults for `EventSource`, `NotifyHistoricalVersions`, `UnversionedResourceTypes` and `MaxLifetimeDays` are the open product-group decisions in [ADR-2611](arch/adr-2611-fhir-subscriptions.md); each is a setting so the decision can change without code changes.
+
+## R4 topic profile
+
+On R4, topics are `Basic` resources described by the StructureDefinition `http://fhir.microsoft.com/StructureDefinition/subscription-topic-basic` ([source](../src/Microsoft.Health.Fhir.R4.Core/Features/Subscriptions/StructureDefinition-subscription-topic-basic.json)). The server ships it, lists it in `Basic.supportedProfile` in the CapabilityStatement when subscriptions are enabled, and resolves it for `$validate` without it being uploaded:
+
+```http
+POST /Basic/$validate?profile=http://fhir.microsoft.com/StructureDefinition/subscription-topic-basic
+```
+
+## Metrics
+
+The server emits these instruments on the `FhirServer` meter:
+
+| Instrument | Type | Tags | Meaning |
+|------------|------|------|---------|
+| `Subscriptions.PumpPositions` | counter | | Transactions or change records the pump read |
+| `Subscriptions.PumpLag` | histogram (s) | | Age of the newest change read; how far notifications trail writes |
+| `Subscriptions.Events` | counter | `outcome` (`matched`, `unevaluable`) | Events numbered for subscriptions |
+| `Subscriptions.Notifications` | counter | `type`, `outcome` (`success`, `failure`) | Handshake, heartbeat and event notification attempts |
+| `Subscriptions.NotificationDuration` | histogram (ms) | `type`, `outcome` | Duration of each attempt |
+| `Subscriptions.StatusChanges` | counter | `status` | Status changes made by the server |
 
 ## Authorization
 

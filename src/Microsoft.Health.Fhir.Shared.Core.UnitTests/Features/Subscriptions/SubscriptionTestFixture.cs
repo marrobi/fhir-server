@@ -72,12 +72,12 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
-        public SubscriptionValidator CreateValidator(SubscriptionsConfiguration configuration = null)
+        public SubscriptionValidator CreateValidator(SubscriptionsConfiguration configuration = null, CoreFeatureConfiguration coreFeatures = null)
         {
             IOptions<SubscriptionsConfiguration> options = Options.Create(configuration ?? new SubscriptionsConfiguration());
             var channel = Substitute.For<ISubscriptionChannel>();
             channel.ChannelType.Returns("rest-hook");
-            return new SubscriptionValidator(SearchEvaluator, FhirPathEvaluator, new SubscriptionEndpointPolicy(options), options, ModelInfoProvider.Instance, [channel]);
+            return new SubscriptionValidator(SearchEvaluator, FhirPathEvaluator, new SubscriptionEndpointPolicy(options), options, ModelInfoProvider.Instance, [channel], coreFeatures == null ? null : Options.Create(coreFeatures));
         }
 
         public SubscriptionAuthorizer CreateAuthorizer(SecurityConfiguration security = null)
@@ -87,7 +87,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
 
         public static ResourceSnapshot Snapshot(Resource resource) => new(resource.ToResourceElement());
 
-        public static ResourceChange Change(Resource current, Resource previous = null, bool deleted = false, int? version = null, long transactionId = 100, string type = null, string id = null)
+        public static ResourceChange Change(Resource current, Resource previous = null, bool deleted = false, int? version = null, long transactionId = 100, string type = null, string id = null, bool writtenAsHistory = false)
         {
             int v = version ?? (previous == null ? 1 : int.Parse(previous.Meta?.VersionId ?? "1") + 1);
             Resource typed = current ?? previous;
@@ -104,6 +104,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
                 Current = current == null ? null : Snapshot(current),
                 Previous = previous == null ? null : Snapshot(previous),
                 PreviousLoaded = v > 1,
+                IsWrittenAsHistory = writtenAsHistory,
             };
         }
     }
