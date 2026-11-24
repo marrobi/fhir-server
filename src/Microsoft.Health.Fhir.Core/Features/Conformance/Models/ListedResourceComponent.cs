@@ -4,9 +4,12 @@
 // -------------------------------------------------------------------------------------------------
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using Microsoft.Health.Fhir.Core.Models;
 using Microsoft.Health.Fhir.ValueSets;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace Microsoft.Health.Fhir.Core.Features.Conformance.Models
 {
@@ -62,5 +65,11 @@ namespace Microsoft.Health.Fhir.Core.Features.Conformance.Models
         public ICollection<string> SearchInclude { get; }
 
         public ICollection<OperationComponent> Operation { get; }
+
+        /// <summary>
+        /// Gets additional elements of the resource entry, such as extensions.
+        /// </summary>
+        [JsonExtensionData]
+        public IDictionary<string, JToken> AdditionalData { get; } = new ConcurrentDictionary<string, JToken>();
     }
 }

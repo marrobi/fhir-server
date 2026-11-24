@@ -1,4 +1,4 @@
-// -------------------------------------------------------------------------------------------------
+﻿// -------------------------------------------------------------------------------------------------
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
 // -------------------------------------------------------------------------------------------------
@@ -24,6 +24,7 @@ using Microsoft.Health.Fhir.Core.Features.Parameters;
 using Microsoft.Health.Fhir.Core.Features.Search.Expressions;
 using Microsoft.Health.Fhir.Core.Features.Search.Registry;
 using Microsoft.Health.Fhir.Core.Features.Search.SemanticSearch;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence;
 using Microsoft.Health.Fhir.Core.Logging.Metrics;
 using Microsoft.Health.Fhir.Core.Messages.Search;
 using Microsoft.Health.Fhir.Core.Messages.Storage;
@@ -38,6 +39,7 @@ using Microsoft.Health.Fhir.SqlServer.Features.Search.Expressions.Visitors;
 using Microsoft.Health.Fhir.SqlServer.Features.Search.SemanticSearch;
 using Microsoft.Health.Fhir.SqlServer.Features.Storage;
 using Microsoft.Health.Fhir.SqlServer.Features.Storage.Registry;
+using Microsoft.Health.Fhir.SqlServer.Features.Subscriptions;
 using Microsoft.Health.Fhir.SqlServer.Features.Watchdogs;
 using Microsoft.Health.Fhir.SqlServer.Registration;
 using Microsoft.Health.JobManagement;
@@ -234,6 +236,13 @@ namespace Microsoft.Extensions.DependencyInjection
             services.Add<GeoReplicationLagWatchdog>().Singleton().AsSelf();
             services.Add<JobMonitorWatchdog>().Singleton().AsSelf();
             services.Add<TransactionWatchdog>().Scoped().AsSelf();
+            services.Add<SubscriptionEventWatchdog>().Singleton().AsSelf();
+
+            // Subscriptions (ADR-2611)
+            services.Add<SqlServerSubscriptionStore>()
+                .Singleton()
+                .AsSelf()
+                .AsService<ISubscriptionStore>();
 
             services.RemoveServiceTypeExact<JobMonitorMetricNotifier, INotificationHandler<JobMonitorMetricsNotification>>()
                     .Add<JobMonitorMetricNotifier>()

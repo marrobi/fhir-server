@@ -11,6 +11,8 @@ using System.Threading.Tasks;
 using EnsureThat;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Microsoft.Health.Fhir.Core.Configs;
 using Microsoft.Health.Fhir.SqlServer.Features.Storage;
 
 namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
@@ -20,10 +22,12 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
         private readonly SqlStoreClient _store;
         private readonly ILogger<InvisibleHistoryCleanupWatchdog> _logger;
         private readonly ISqlRetryService _sqlRetryService;
+        private readonly SubscriptionsConfiguration _subscriptionsConfiguration;
 
-        public InvisibleHistoryCleanupWatchdog(SqlStoreClient store, ISqlRetryService sqlRetryService, ILogger<InvisibleHistoryCleanupWatchdog> logger)
+        public InvisibleHistoryCleanupWatchdog(SqlStoreClient store, ISqlRetryService sqlRetryService, ILogger<InvisibleHistoryCleanupWatchdog> logger, IOptions<SubscriptionsConfiguration> subscriptionsConfiguration = null)
             : base(sqlRetryService, logger)
         {
+            _subscriptionsConfiguration = subscriptionsConfiguration?.Value;
             _sqlRetryService = EnsureArg.IsNotNull(sqlRetryService, nameof(sqlRetryService));
             _store = EnsureArg.IsNotNull(store, nameof(store));
             _logger = EnsureArg.IsNotNull(logger, nameof(logger));
@@ -58,7 +62,7 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
             {
                 var lastTranId = await GetLastCleanedUpTransactionIdAsync(cancellationToken);
                 _logger.LogInformation($"{Name}: last cleaned up transaction={lastTranId}.");
-                var transToClean = await _store.GetTransactionsAsync(lastTranId, visibility, cancellationToken, DateTime.UtcNow.AddDays(-1 * RetentionPeriodDays));
+                var transToClean = await _store.GetTransactionsAsync(lastTranId, visibility, cancellationToken, DateTime.UtcNow.AddDays(-1 * GetEffectiveRetentionDays()));
                 _logger.LogInformation($"{Name}: found transactions={transToClean.Count}.");
                 if (transToClean.Count > 0)
                 {
@@ -82,6 +86,21 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
             while (transToCleanCount > 0);
 
             _logger.LogInformation($"{Name}: completed. transactions={totalTrans} removed rows={totalRows}");
+        }
+
+        /// <summary>
+        /// The subscription event pump reads history versions written by each transaction. While subscriptions are enabled, invisible
+        /// history is kept at least as long as the pump may lag (MaxHistoryCleanupHoldHours). Beyond that the history is removed and the
+        /// pump records affected events as unevaluable (ADR-2611).
+        /// </summary>
+        internal double GetEffectiveRetentionDays()
+        {
+            if (_subscriptionsConfiguration?.Enabled != true)
+            {
+                return RetentionPeriodDays;
+            }
+
+            return Math.Max(RetentionPeriodDays, _subscriptionsConfiguration.MaxHistoryCleanupHoldHours / 24.0);
         }
 
         private async Task<long> GetLastCleanedUpTransactionIdAsync(CancellationToken cancellationToken)

@@ -1,4 +1,4 @@
-// -------------------------------------------------------------------------------------------------
+﻿// -------------------------------------------------------------------------------------------------
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
 // -------------------------------------------------------------------------------------------------
@@ -157,6 +157,23 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Storage
             //// ignore invisible resources
             return (await cmd.ExecuteReaderAsync(_sqlRetryService, (reader) => { return ReadResourceWrapper(reader, true, decompress, getResourceTypeName); }, _logger, cancellationToken)).Where(_ => _.RawResource.Data != _invisibleResource).ToList();
         }
+
+        /// <summary>
+        /// Returns every resource version written by a transaction, including versions that are already history and versions whose
+        /// content was removed (invisible), so the subscription event pump can evaluate exactly what each transaction wrote.
+        /// </summary>
+        internal async Task<IReadOnlyList<ResourceWrapper>> GetAllResourceVersionsByTransactionIdAsync(long transactionId, Func<MemoryStream, string> decompress, Func<short, string> getResourceTypeName, CancellationToken cancellationToken)
+        {
+            await using var cmd = new SqlCommand() { CommandText = "dbo.GetResourcesByTransactionId", CommandType = CommandType.StoredProcedure, CommandTimeout = 600 };
+            cmd.Parameters.AddWithValue("@TransactionId", transactionId);
+            cmd.Parameters.AddWithValue("@IncludeHistory", true);
+            return await cmd.ExecuteReaderAsync(_sqlRetryService, (reader) => { return ReadResourceWrapper(reader, true, decompress, getResourceTypeName); }, _logger, cancellationToken);
+        }
+
+        /// <summary>
+        /// Returns true when the raw resource content has been removed (an invisible history row).
+        /// </summary>
+        internal static bool IsInvisible(ResourceWrapper wrapper) => wrapper?.RawResource?.Data == _invisibleResource;
 
         private static ResourceWrapper ReadResourceWrapper(SqlDataReader reader, bool readRequestMethod, Func<MemoryStream, string> decompress, Func<short, string> getResourceTypeName)
         {

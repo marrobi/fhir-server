@@ -101,6 +101,7 @@ namespace Microsoft.Extensions.DependencyInjection
             services.AddSingleton(Options.Options.Create(fhirServerConfiguration.Security));
             services.AddSingleton(Options.Options.Create(fhirServerConfiguration.Features));
             services.AddSingleton(Options.Options.Create(fhirServerConfiguration.CoreFeatures));
+            services.AddSingleton(Options.Options.Create(fhirServerConfiguration.Subscriptions));
             services.AddSingleton(Options.Options.Create(fhirServerConfiguration.CoreFeatures.VectorSearch));
             services.AddSingleton(Options.Options.Create(fhirServerConfiguration.Cors));
             services.AddSingleton(Options.Options.Create(fhirServerConfiguration.Operations));

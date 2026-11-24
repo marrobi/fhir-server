@@ -1047,4 +1047,163 @@
     <value>Resource type '{0}': {1} resource(s) affected.</value>
     <comment>{0} is a resource type. {1} is the number of resources with a reference id longer than the maximum resource id length.</comment>
   </data>
+  <data name="SubscriptionInvalidCriteriaParameter" xml:space="preserve">
+    <value>The criteria parameter '{0}' is not in the form name=value.</value>
+  </data>
+  <data name="SubscriptionCriteriaParameterEmpty" xml:space="preserve">
+    <value>The criteria parameter '{0}' must have a name and a value.</value>
+  </data>
+  <data name="SubscriptionCriteriaModifierNotSupported" xml:space="preserve">
+    <value>The modifier ':{0}' on parameter '{1}' is not supported in subscription criteria.</value>
+  </data>
+  <data name="SubscriptionCriteriaParameterNotSupported" xml:space="preserve">
+    <value>The parameter '{0}' is not supported in subscription criteria. Chained, reverse-chained, composite, terminology and result parameters cannot be evaluated when a resource changes.</value>
+  </data>
+  <data name="SubscriptionCriteriaParameterInvalid" xml:space="preserve">
+    <value>The criteria '{0}={1}' is not valid: {2}</value>
+  </data>
+  <data name="SubscriptionFhirPathInvalid" xml:space="preserve">
+    <value>The FHIRPath criteria '{0}' is not valid: {1}</value>
+  </data>
+  <data name="SubscriptionEndpointNotAbsolute" xml:space="preserve">
+    <value>The subscription endpoint must be an absolute URL.</value>
+  </data>
+  <data name="SubscriptionEndpointMustBeHttps" xml:space="preserve">
+    <value>The subscription endpoint must use HTTPS.</value>
+  </data>
+  <data name="SubscriptionEndpointUserInfo" xml:space="preserve">
+    <value>The subscription endpoint must not contain user information.</value>
+  </data>
+  <data name="SubscriptionEndpointHostNotAllowed" xml:space="preserve">
+    <value>The subscription endpoint host '{0}' is not in the server's allow-list.</value>
+  </data>
+  <data name="SubscriptionEndpointAddressNotAllowed" xml:space="preserve">
+    <value>The subscription endpoint '{0}' resolves to an address that is not allowed (loopback, private, link-local or otherwise non-public).</value>
+  </data>
+  <data name="SubscriptionEndpointReturnedStatus" xml:space="preserve">
+    <value>The endpoint returned HTTP status {0}.</value>
+  </data>
+  <data name="SubscriptionEndpointTimedOut" xml:space="preserve">
+    <value>The endpoint did not respond within {0} seconds.</value>
+  </data>
+  <data name="SubscriptionEndpointUnreachable" xml:space="preserve">
+    <value>The endpoint could not be reached ({0}).</value>
+  </data>
+  <data name="SubscriptionTopicUrlRequired" xml:space="preserve">
+    <value>A subscription topic must have an absolute canonical url.</value>
+  </data>
+  <data name="SubscriptionTopicEventTriggerNotSupported" xml:space="preserve">
+    <value>Subscription topic event triggers are not supported. Only resource triggers can be used.</value>
+  </data>
+  <data name="SubscriptionTopicResourceTriggerRequired" xml:space="preserve">
+    <value>A subscription topic must have at least one resource trigger.</value>
+  </data>
+  <data name="SubscriptionTopicUnknownResource" xml:space="preserve">
+    <value>The subscription topic resource trigger '{0}' is not a known resource type.</value>
+  </data>
+  <data name="SubscriptionTopicOnSubscriptionNotSupported" xml:space="preserve">
+    <value>Subscription topics cannot trigger on Subscription resources.</value>
+  </data>
+  <data name="SubscriptionTopicFilterParameterRequired" xml:space="preserve">
+    <value>Each subscription topic canFilterBy entry must have a filterParameter.</value>
+  </data>
+  <data name="SubscriptionTopicFilterParameterUnknown" xml:space="preserve">
+    <value>The subscription topic filter parameter '{0}' is not a search parameter of the topic's resource types.</value>
+  </data>
+  <data name="SubscriptionTopicNotFound" xml:space="preserve">
+    <value>The subscription topic '{0}' is not defined on this server.</value>
+  </data>
+  <data name="SubscriptionTopicRetired" xml:space="preserve">
+    <value>The subscription topic '{0}' is retired.</value>
+  </data>
+  <data name="SubscriptionTopicNotValid" xml:space="preserve">
+    <value>The subscription topic '{0}' is not valid on this server.</value>
+  </data>
+  <data name="SubscriptionChannelNotSupported" xml:space="preserve">
+    <value>The subscription channel type '{0}' is not supported. Supported channel types: rest-hook.</value>
+  </data>
+  <data name="SubscriptionContentTypeNotSupported" xml:space="preserve">
+    <value>The subscription content type '{0}' is not supported. Use application/fhir+json or application/fhir+xml.</value>
+  </data>
+  <data name="SubscriptionHeartbeatTooShort" xml:space="preserve">
+    <value>The subscription heartbeat period must be at least {0} seconds.</value>
+  </data>
+  <data name="SubscriptionTimeoutOutOfRange" xml:space="preserve">
+    <value>The subscription timeout must be between 1 and {0} seconds.</value>
+  </data>
+  <data name="SubscriptionMaxCountInvalid" xml:space="preserve">
+    <value>The subscription maxCount must be at least 1.</value>
+  </data>
+  <data name="SubscriptionHeaderNotAllowed" xml:space="preserve">
+    <value>The subscription header '{0}' is not allowed.</value>
+  </data>
+  <data name="SubscriptionFilterIncomplete" xml:space="preserve">
+    <value>Each subscription filter must have a filter parameter and a value.</value>
+  </data>
+  <data name="SubscriptionFilterNotAllowedByTopic" xml:space="preserve">
+    <value>The filter parameter '{0}' is not allowed by subscription topic '{1}'.</value>
+  </data>
+  <data name="SubscriptionFilterModifierNotAllowed" xml:space="preserve">
+    <value>The modifier '{0}' is not allowed for filter parameter '{1}'.</value>
+  </data>
+  <data name="SubscriptionFilterComparatorNotAllowed" xml:space="preserve">
+    <value>The comparator '{0}' is not allowed for filter parameter '{1}'.</value>
+  </data>
+  <data name="SubscriptionTopicCriteriaTypeMismatch" xml:space="preserve">
+    <value>The criteria '{0}' does not apply to resource type '{1}'.</value>
+  </data>
+  <data name="SubscriptionNotAuthorizedForContent" xml:space="preserve">
+    <value>This subscription has no authorization for its current content. It was written without the API, or changed since it was authorized. Update it through the API to activate it.</value>
+  </data>
+  <data name="SubscriptionEnded" xml:space="preserve">
+    <value>The subscription reached its end time.</value>
+  </data>
+  <data name="SubscriptionHandshakeFailed" xml:space="preserve">
+    <value>The handshake failed: {0}</value>
+  </data>
+  <data name="SubscriptionDeliveryFailed" xml:space="preserve">
+    <value>Notification delivery failed after {0} attempts: {1} Set the status to requested to retry; undelivered events are retained.</value>
+  </data>
+  <data name="SubscriptionHeartbeatFailed" xml:space="preserve">
+    <value>The heartbeat failed: {0}</value>
+  </data>
+  <data name="SubscriptionsNotSupportedForVersion" xml:space="preserve">
+    <value>Topic-based subscriptions are not supported for this FHIR version.</value>
+  </data>
+  <data name="SubscriptionTopicNotATopic" xml:space="preserve">
+    <value>The resource is not a subscription topic.</value>
+  </data>
+  <data name="SubscriptionTopicRequired" xml:space="preserve">
+    <value>A subscription must reference a subscription topic.</value>
+  </data>
+  <data name="SubscriptionChannelTypeRequired" xml:space="preserve">
+    <value>A subscription must specify a channel type.</value>
+  </data>
+  <data name="SubscriptionClassicNotSupported" xml:space="preserve">
+    <value>Only topic-based subscriptions are supported. Subscription.criteria must be the canonical URL of a subscription topic (Subscriptions R5 Backport IG); criteria-based R4 subscriptions are not supported.</value>
+  </data>
+  <data name="SubscriptionTopicInteractionInvalid" xml:space="preserve">
+    <value>The subscription topic interaction '{0}' is not valid. Use create, update or delete.</value>
+  </data>
+  <data name="SubscriptionTopicCriteriaBehaviorInvalid" xml:space="preserve">
+    <value>The query criteria result behavior '{0}' is not valid. Use test-passes or test-fails.</value>
+  </data>
+  <data name="SubscriptionContentInvalid" xml:space="preserve">
+    <value>The subscription payload content '{0}' is not valid. Use empty, id-only or full-resource.</value>
+  </data>
+  <data name="SubscriptionLimitReached" xml:space="preserve">
+    <value>The maximum number of active subscriptions ({0}) has been reached.</value>
+  </data>
+  <data name="SubscriptionsNotEnabled" xml:space="preserve">
+    <value>Topic-based subscriptions are not enabled on this server.</value>
+  </data>
+  <data name="SubscriptionStatusIdRequired" xml:space="preserve">
+    <value>The $status operation needs at least one subscription id.</value>
+  </data>
+  <data name="SubscriptionUnevaluableEvents" xml:space="preserve">
+    <value>{0} event(s) could not be evaluated because a resource version was no longer available; they were not sent.</value>
+  </data>
+  <data name="SubscriptionsRequireSqlServer" xml:space="preserve">
+    <value>Topic-based subscriptions require the SQL Server data store.</value>
+  </data>
 </root>

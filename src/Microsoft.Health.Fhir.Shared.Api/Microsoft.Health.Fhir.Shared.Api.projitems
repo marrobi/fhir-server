@@ -12,6 +12,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Controllers\BulkDeleteController.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Controllers\BulkUpdateController.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Controllers\ConvertDataController.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Controllers\SubscriptionController.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Controllers\DocRefController.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Controllers\ImportController.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Controllers\EverythingController.cs" />
@@ -93,6 +94,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Modules\OperationsModule.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Modules\PersistenceModule.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Modules\SearchModule.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Modules\SubscriptionsModule.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Modules\TerminologyModule.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Modules\ValidationModule.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Registration\FhirServerServiceCollectionExtensions.cs" />

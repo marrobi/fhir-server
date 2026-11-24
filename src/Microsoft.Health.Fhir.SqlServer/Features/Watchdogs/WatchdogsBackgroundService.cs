@@ -1,4 +1,4 @@
-// -------------------------------------------------------------------------------------------------
+﻿// -------------------------------------------------------------------------------------------------
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
 // -------------------------------------------------------------------------------------------------
@@ -32,6 +32,8 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
         private readonly JobMonitorWatchdog _jobMonitorWatchdog;
         private readonly CoreFeatureConfiguration _coreFeatureConfiguration;
         private readonly WatchdogConfiguration _watchdogConfiguration;
+        private readonly SubscriptionEventWatchdog _subscriptionEventWatchdog;
+        private readonly SubscriptionsConfiguration _subscriptionsConfiguration;
 
         public WatchdogsBackgroundService(
             DefragWatchdog defragWatchdog,
@@ -42,7 +44,9 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
             GeoReplicationLagWatchdog geoReplicationLagWatchdog,
             JobMonitorWatchdog jobMonitorWatchdog,
             IOptions<CoreFeatureConfiguration> coreFeatureConfiguration,
-            IOptions<WatchdogConfiguration> watchdogConfiguration)
+            IOptions<WatchdogConfiguration> watchdogConfiguration,
+            SubscriptionEventWatchdog subscriptionEventWatchdog = null,
+            IOptions<SubscriptionsConfiguration> subscriptionsConfiguration = null)
         {
             _defragWatchdog = EnsureArg.IsNotNull(defragWatchdog, nameof(defragWatchdog));
             _cleanupEventLogWatchdog = EnsureArg.IsNotNull(cleanupEventLogWatchdog, nameof(cleanupEventLogWatchdog));
@@ -53,6 +57,8 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
             _jobMonitorWatchdog = EnsureArg.IsNotNull(jobMonitorWatchdog, nameof(jobMonitorWatchdog));
             _coreFeatureConfiguration = EnsureArg.IsNotNull(coreFeatureConfiguration?.Value, nameof(coreFeatureConfiguration));
             _watchdogConfiguration = EnsureArg.IsNotNull(watchdogConfiguration?.Value, nameof(watchdogConfiguration));
+            _subscriptionEventWatchdog = subscriptionEventWatchdog;
+            _subscriptionsConfiguration = subscriptionsConfiguration?.Value ?? new SubscriptionsConfiguration();
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -88,6 +94,11 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
             if (_watchdogConfiguration.ExpiredResource.Enabled)
             {
                 tasks.Add(_expiredResourceCleanupWatchdog.ExecuteAsync(continuationTokenSource.Token));
+            }
+
+            if (_subscriptionsConfiguration.Enabled && _subscriptionEventWatchdog != null)
+            {
+                tasks.Add(_subscriptionEventWatchdog.ExecuteAsync(continuationTokenSource.Token));
             }
 
             await Task.WhenAny(tasks);

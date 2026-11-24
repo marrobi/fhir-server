@@ -35,9 +35,12 @@ namespace Microsoft.Health.Fhir.Core.Features.Security
         Create = 1 << 14, // SMART v2 create permission
         Update = 1 << 15, // SMART v2 update permission
 
+        // Create, update or delete subscription topics (SubscriptionTopic, or Basic topics on R4). See ADR-2611.
+        SubscriptionTopic = 1 << 16,
+
         Smart = 1 << 30, // Do not include Smart in the '*' case.  We only want smart for a user if explicitly added to the role or user
 
         [EnumMember(Value = "*")]
-        All = (Update << 1) - 1,
+        All = (SubscriptionTopic << 1) - 1,
     }
 }

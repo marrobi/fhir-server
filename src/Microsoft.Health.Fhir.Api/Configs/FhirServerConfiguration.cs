@@ -46,5 +46,7 @@ namespace Microsoft.Health.Fhir.Api.Configs
         public WatchdogConfiguration Watchdog { get; } = new WatchdogConfiguration();
 
         public ForwardedHeadersConfiguration ForwardedHeaders { get; } = new ForwardedHeadersConfiguration();
+
+        public SubscriptionsConfiguration Subscriptions { get; } = new SubscriptionsConfiguration();
     }
 }

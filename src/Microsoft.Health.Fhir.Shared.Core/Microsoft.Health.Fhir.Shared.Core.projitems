@@ -1,4 +1,4 @@
-<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
     <MSBuildAllProjects>$(MSBuildAllProjects);$(MSBuildThisFileFullPath)</MSBuildAllProjects>
     <HasSharedItems>true</HasSharedItems>
@@ -38,6 +38,10 @@
     <Compile Include="$(MSBuildThisFileDirectory)Features\Operations\SearchParameterState\SearchParameterStateUpdateHandler.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Persistence\BulkOperationAuditLogHelper.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Persistence\RawResourceFactory.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionModelConverter.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionNotificationFactory.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionResourceLoader.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionStatusWriter.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Resources\BaseResourceHandler.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Resources\ConditionalResourceHandler.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Resources\Create\ConditionalCreateResourceHandler.cs" />

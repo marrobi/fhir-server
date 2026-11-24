@@ -87,6 +87,9 @@ namespace Microsoft.Health.Fhir.Core.Features.Routing
         public const string SearchParametersStatusById = SearchParameters + IdRouteSegment + "/" + Status;
         public const string SearchParametersStatusPostQuery = SearchParametersStatusQuery + "/" + Search;
 
+        public const string SubscriptionStatus = "Subscription/" + Status;
+        public const string SubscriptionStatusById = "Subscription/" + IdRouteSegment + "/" + Status;
+
         public const string BulkDelete = "$bulk-delete";
         public const string BulkDeleteResourceType = ResourceType + "/" + BulkDelete;
         public const string BulkDeleteSoftDeleted = "$bulk-delete-soft-deleted";

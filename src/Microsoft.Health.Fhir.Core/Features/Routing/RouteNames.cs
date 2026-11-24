@@ -67,6 +67,10 @@ namespace Microsoft.Health.Fhir.Core.Features.Routing
 
         internal const string SearchParameterState = nameof(SearchParameterState);
 
+        internal const string SubscriptionStatus = nameof(SubscriptionStatus);
+
+        internal const string SubscriptionStatusById = nameof(SubscriptionStatusById);
+
         internal const string SearchParameterStatusOperationDefinition = "SearchParameterStatusOperationDefinition";
 
         internal const string PostSearchParameterState = nameof(PostSearchParameterState);

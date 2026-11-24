@@ -2608,5 +2608,482 @@ namespace Microsoft.Health.Fhir.Core {
                 return ResourceManager.GetString("FhirPackageManifestInvalid", resourceCulture);
             }
         }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The criteria parameter &#x27;{0}&#x27; is not in the form name=value..
+        /// </summary>
+        internal static string SubscriptionInvalidCriteriaParameter {
+            get {
+                return ResourceManager.GetString("SubscriptionInvalidCriteriaParameter", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The criteria parameter &#x27;{0}&#x27; must have a name and a value..
+        /// </summary>
+        internal static string SubscriptionCriteriaParameterEmpty {
+            get {
+                return ResourceManager.GetString("SubscriptionCriteriaParameterEmpty", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The modifier &#x27;:{0}&#x27; on parameter &#x27;{1}&#x27; is not supported in subscription criteria..
+        /// </summary>
+        internal static string SubscriptionCriteriaModifierNotSupported {
+            get {
+                return ResourceManager.GetString("SubscriptionCriteriaModifierNotSupported", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The parameter &#x27;{0}&#x27; is not supported in subscription criteria. Chained, reverse-chained, composite, terminology and result parameters cannot be evaluated when a resource changes..
+        /// </summary>
+        internal static string SubscriptionCriteriaParameterNotSupported {
+            get {
+                return ResourceManager.GetString("SubscriptionCriteriaParameterNotSupported", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The criteria &#x27;{0}={1}&#x27; is not valid: {2}.
+        /// </summary>
+        internal static string SubscriptionCriteriaParameterInvalid {
+            get {
+                return ResourceManager.GetString("SubscriptionCriteriaParameterInvalid", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The FHIRPath criteria &#x27;{0}&#x27; is not valid: {1}.
+        /// </summary>
+        internal static string SubscriptionFhirPathInvalid {
+            get {
+                return ResourceManager.GetString("SubscriptionFhirPathInvalid", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription endpoint must be an absolute URL..
+        /// </summary>
+        internal static string SubscriptionEndpointNotAbsolute {
+            get {
+                return ResourceManager.GetString("SubscriptionEndpointNotAbsolute", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription endpoint must use HTTPS..
+        /// </summary>
+        internal static string SubscriptionEndpointMustBeHttps {
+            get {
+                return ResourceManager.GetString("SubscriptionEndpointMustBeHttps", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription endpoint must not contain user information..
+        /// </summary>
+        internal static string SubscriptionEndpointUserInfo {
+            get {
+                return ResourceManager.GetString("SubscriptionEndpointUserInfo", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription endpoint host &#x27;{0}&#x27; is not in the server&#x27;s allow-list..
+        /// </summary>
+        internal static string SubscriptionEndpointHostNotAllowed {
+            get {
+                return ResourceManager.GetString("SubscriptionEndpointHostNotAllowed", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription endpoint &#x27;{0}&#x27; resolves to an address that is not allowed (loopback, private, link-local or otherwise non-public)..
+        /// </summary>
+        internal static string SubscriptionEndpointAddressNotAllowed {
+            get {
+                return ResourceManager.GetString("SubscriptionEndpointAddressNotAllowed", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The endpoint returned HTTP status {0}..
+        /// </summary>
+        internal static string SubscriptionEndpointReturnedStatus {
+            get {
+                return ResourceManager.GetString("SubscriptionEndpointReturnedStatus", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The endpoint did not respond within {0} seconds..
+        /// </summary>
+        internal static string SubscriptionEndpointTimedOut {
+            get {
+                return ResourceManager.GetString("SubscriptionEndpointTimedOut", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The endpoint could not be reached ({0})..
+        /// </summary>
+        internal static string SubscriptionEndpointUnreachable {
+            get {
+                return ResourceManager.GetString("SubscriptionEndpointUnreachable", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to A subscription topic must have an absolute canonical url..
+        /// </summary>
+        internal static string SubscriptionTopicUrlRequired {
+            get {
+                return ResourceManager.GetString("SubscriptionTopicUrlRequired", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Subscription topic event triggers are not supported. Only resource triggers can be used..
+        /// </summary>
+        internal static string SubscriptionTopicEventTriggerNotSupported {
+            get {
+                return ResourceManager.GetString("SubscriptionTopicEventTriggerNotSupported", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to A subscription topic must have at least one resource trigger..
+        /// </summary>
+        internal static string SubscriptionTopicResourceTriggerRequired {
+            get {
+                return ResourceManager.GetString("SubscriptionTopicResourceTriggerRequired", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription topic resource trigger &#x27;{0}&#x27; is not a known resource type..
+        /// </summary>
+        internal static string SubscriptionTopicUnknownResource {
+            get {
+                return ResourceManager.GetString("SubscriptionTopicUnknownResource", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Subscription topics cannot trigger on Subscription resources..
+        /// </summary>
+        internal static string SubscriptionTopicOnSubscriptionNotSupported {
+            get {
+                return ResourceManager.GetString("SubscriptionTopicOnSubscriptionNotSupported", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Each subscription topic canFilterBy entry must have a filterParameter..
+        /// </summary>
+        internal static string SubscriptionTopicFilterParameterRequired {
+            get {
+                return ResourceManager.GetString("SubscriptionTopicFilterParameterRequired", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription topic filter parameter &#x27;{0}&#x27; is not a search parameter of the topic&#x27;s resource types..
+        /// </summary>
+        internal static string SubscriptionTopicFilterParameterUnknown {
+            get {
+                return ResourceManager.GetString("SubscriptionTopicFilterParameterUnknown", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription topic &#x27;{0}&#x27; is not defined on this server..
+        /// </summary>
+        internal static string SubscriptionTopicNotFound {
+            get {
+                return ResourceManager.GetString("SubscriptionTopicNotFound", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription topic &#x27;{0}&#x27; is retired..
+        /// </summary>
+        internal static string SubscriptionTopicRetired {
+            get {
+                return ResourceManager.GetString("SubscriptionTopicRetired", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription topic &#x27;{0}&#x27; is not valid on this server..
+        /// </summary>
+        internal static string SubscriptionTopicNotValid {
+            get {
+                return ResourceManager.GetString("SubscriptionTopicNotValid", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription channel type &#x27;{0}&#x27; is not supported. Supported channel types: rest-hook..
+        /// </summary>
+        internal static string SubscriptionChannelNotSupported {
+            get {
+                return ResourceManager.GetString("SubscriptionChannelNotSupported", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription content type &#x27;{0}&#x27; is not supported. Use application/fhir+json or application/fhir+xml..
+        /// </summary>
+        internal static string SubscriptionContentTypeNotSupported {
+            get {
+                return ResourceManager.GetString("SubscriptionContentTypeNotSupported", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription heartbeat period must be at least {0} seconds..
+        /// </summary>
+        internal static string SubscriptionHeartbeatTooShort {
+            get {
+                return ResourceManager.GetString("SubscriptionHeartbeatTooShort", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription timeout must be between 1 and {0} seconds..
+        /// </summary>
+        internal static string SubscriptionTimeoutOutOfRange {
+            get {
+                return ResourceManager.GetString("SubscriptionTimeoutOutOfRange", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription maxCount must be at least 1..
+        /// </summary>
+        internal static string SubscriptionMaxCountInvalid {
+            get {
+                return ResourceManager.GetString("SubscriptionMaxCountInvalid", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription header &#x27;{0}&#x27; is not allowed..
+        /// </summary>
+        internal static string SubscriptionHeaderNotAllowed {
+            get {
+                return ResourceManager.GetString("SubscriptionHeaderNotAllowed", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Each subscription filter must have a filter parameter and a value..
+        /// </summary>
+        internal static string SubscriptionFilterIncomplete {
+            get {
+                return ResourceManager.GetString("SubscriptionFilterIncomplete", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The filter parameter &#x27;{0}&#x27; is not allowed by subscription topic &#x27;{1}&#x27;..
+        /// </summary>
+        internal static string SubscriptionFilterNotAllowedByTopic {
+            get {
+                return ResourceManager.GetString("SubscriptionFilterNotAllowedByTopic", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The modifier &#x27;{0}&#x27; is not allowed for filter parameter &#x27;{1}&#x27;..
+        /// </summary>
+        internal static string SubscriptionFilterModifierNotAllowed {
+            get {
+                return ResourceManager.GetString("SubscriptionFilterModifierNotAllowed", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The comparator &#x27;{0}&#x27; is not allowed for filter parameter &#x27;{1}&#x27;..
+        /// </summary>
+        internal static string SubscriptionFilterComparatorNotAllowed {
+            get {
+                return ResourceManager.GetString("SubscriptionFilterComparatorNotAllowed", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The criteria &#x27;{0}&#x27; does not apply to resource type &#x27;{1}&#x27;..
+        /// </summary>
+        internal static string SubscriptionTopicCriteriaTypeMismatch {
+            get {
+                return ResourceManager.GetString("SubscriptionTopicCriteriaTypeMismatch", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to This subscription has no authorization for its current content. It was written without the API, or changed since it was authorized. Update it through the API to activate it..
+        /// </summary>
+        internal static string SubscriptionNotAuthorizedForContent {
+            get {
+                return ResourceManager.GetString("SubscriptionNotAuthorizedForContent", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription reached its end time..
+        /// </summary>
+        internal static string SubscriptionEnded {
+            get {
+                return ResourceManager.GetString("SubscriptionEnded", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The handshake failed: {0}.
+        /// </summary>
+        internal static string SubscriptionHandshakeFailed {
+            get {
+                return ResourceManager.GetString("SubscriptionHandshakeFailed", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Notification delivery failed after {0} attempts: {1} Set the status to requested to retry; undelivered events are retained..
+        /// </summary>
+        internal static string SubscriptionDeliveryFailed {
+            get {
+                return ResourceManager.GetString("SubscriptionDeliveryFailed", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The heartbeat failed: {0}.
+        /// </summary>
+        internal static string SubscriptionHeartbeatFailed {
+            get {
+                return ResourceManager.GetString("SubscriptionHeartbeatFailed", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Topic-based subscriptions are not supported for this FHIR version..
+        /// </summary>
+        internal static string SubscriptionsNotSupportedForVersion {
+            get {
+                return ResourceManager.GetString("SubscriptionsNotSupportedForVersion", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The resource is not a subscription topic..
+        /// </summary>
+        internal static string SubscriptionTopicNotATopic {
+            get {
+                return ResourceManager.GetString("SubscriptionTopicNotATopic", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to A subscription must reference a subscription topic..
+        /// </summary>
+        internal static string SubscriptionTopicRequired {
+            get {
+                return ResourceManager.GetString("SubscriptionTopicRequired", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to A subscription must specify a channel type..
+        /// </summary>
+        internal static string SubscriptionChannelTypeRequired {
+            get {
+                return ResourceManager.GetString("SubscriptionChannelTypeRequired", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Only topic-based subscriptions are supported. Subscription.criteria must be the canonical URL of a subscription topic (Subscriptions R5 Backport IG); criteria-based R4 subscriptions are not supported..
+        /// </summary>
+        internal static string SubscriptionClassicNotSupported {
+            get {
+                return ResourceManager.GetString("SubscriptionClassicNotSupported", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription topic interaction &#x27;{0}&#x27; is not valid. Use create, update or delete..
+        /// </summary>
+        internal static string SubscriptionTopicInteractionInvalid {
+            get {
+                return ResourceManager.GetString("SubscriptionTopicInteractionInvalid", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The query criteria result behavior &#x27;{0}&#x27; is not valid. Use test-passes or test-fails..
+        /// </summary>
+        internal static string SubscriptionTopicCriteriaBehaviorInvalid {
+            get {
+                return ResourceManager.GetString("SubscriptionTopicCriteriaBehaviorInvalid", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription payload content &#x27;{0}&#x27; is not valid. Use empty, id-only or full-resource..
+        /// </summary>
+        internal static string SubscriptionContentInvalid {
+            get {
+                return ResourceManager.GetString("SubscriptionContentInvalid", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The maximum number of active subscriptions ({0}) has been reached..
+        /// </summary>
+        internal static string SubscriptionLimitReached {
+            get {
+                return ResourceManager.GetString("SubscriptionLimitReached", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Topic-based subscriptions are not enabled on this server..
+        /// </summary>
+        internal static string SubscriptionsNotEnabled {
+            get {
+                return ResourceManager.GetString("SubscriptionsNotEnabled", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The $status operation needs at least one subscription id..
+        /// </summary>
+        internal static string SubscriptionStatusIdRequired {
+            get {
+                return ResourceManager.GetString("SubscriptionStatusIdRequired", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to {0} event(s) could not be evaluated because a resource version was no longer available; they were not sent..
+        /// </summary>
+        internal static string SubscriptionUnevaluableEvents {
+            get {
+                return ResourceManager.GetString("SubscriptionUnevaluableEvents", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Topic-based subscriptions require the SQL Server data store..
+        /// </summary>
+        internal static string SubscriptionsRequireSqlServer {
+            get {
+                return ResourceManager.GetString("SubscriptionsRequireSqlServer", resourceCulture);
+            }
+        }
     }
 }

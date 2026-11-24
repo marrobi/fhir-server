@@ -8,7 +8,7 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Schema
     public static class SchemaVersionConstants
     {
         public const int Min = (int)SchemaVersion.V113;
-        public const int Max = (int)SchemaVersion.V122;
+        public const int Max = (int)SchemaVersion.V123;
         public const int MinForUpgrade = (int)SchemaVersion.V111; // this is the latest full schema snapshot, starting with which we can upgrade to the latest version.
         public const int SearchParameterStatusSchemaVersion = (int)SchemaVersion.V6;
         public const int SupportForReferencesWithMissingTypeVersion = (int)SchemaVersion.V7;
@@ -44,5 +44,6 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Schema
         // It is currently used in Azure Healthcare APIs.
         public const int ParameterizedRemovePartitionFromResourceChangesVersion = (int)SchemaVersion.V21;
         public const int SupportsClusteredIdOnResourceChangesVersion = (int)SchemaVersion.V24;
+        public const int Subscriptions = (int)SchemaVersion.V123;
     }
 }
