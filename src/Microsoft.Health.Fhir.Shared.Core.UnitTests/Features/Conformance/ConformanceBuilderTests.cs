@@ -122,6 +122,38 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Conformance
         }
 
         [Fact]
+        public async System.Threading.Tasks.Task GivenAProfileDeclaredByACapabilityProvider_WhenProfilesAreSynced_ThenItIsKeptAndStaleSyncedProfilesAreRemoved()
+        {
+            // Arrange
+            const string declared = "http://hl7.org/fhir/uv/subscriptions-backport/StructureDefinition/backport-subscription";
+            var supportedProfiles = Substitute.For<ISupportedProfilesStore>();
+            supportedProfiles.GetSupportedProfilesAsync("Patient", Arg.Any<CancellationToken>(), Arg.Any<bool>())
+                .Returns(
+                    System.Threading.Tasks.Task.FromResult<IEnumerable<string>>(new[] { "http://example.org/old" }),
+                    System.Threading.Tasks.Task.FromResult<IEnumerable<string>>(new[] { "http://example.org/new" }));
+            IOptions<CoreFeatureConfiguration> configuration = Substitute.For<IOptions<CoreFeatureConfiguration>>();
+            configuration.Value.Returns(new CoreFeatureConfiguration());
+            var builder = CapabilityStatementBuilder.Create(
+                ModelInfoProvider.Instance,
+                _searchParameterDefinitionManager,
+                configuration,
+                supportedProfiles,
+                _metadataUrl,
+                _searchParameterStatusManager);
+            builder.ApplyToResource("Patient", c => c.SupportedProfile.Add(declared));
+
+            // Act
+            await builder.SyncProfilesAsync(CancellationToken.None);
+            await builder.SyncProfilesAsync(CancellationToken.None);
+
+            // Assert
+            var patient = ((CapabilityStatement)builder.Build().ToPoco()).Rest.First().Resource.First(r => r.Type.ToString() == KnownResourceTypes.Patient);
+            Assert.Contains(declared, patient.SupportedProfile);
+            Assert.Contains("http://example.org/new", patient.SupportedProfile);
+            Assert.DoesNotContain("http://example.org/old", patient.SupportedProfile);
+        }
+
+        [Fact]
         public void GivenAConformanceBuilder_WhenResourceTypeOverridesContainsResourcesThatDontMatch_ThenResourceUsesDefaultVersionLogic()
         {
             IOptions<CoreFeatureConfiguration> configuration = Substitute.For<IOptions<CoreFeatureConfiguration>>();

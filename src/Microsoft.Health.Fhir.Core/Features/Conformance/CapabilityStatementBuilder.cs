@@ -4,6 +4,7 @@
 // -------------------------------------------------------------------------------------------------
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -38,6 +39,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Conformance
         private readonly ISearchParameterDefinitionManager _searchParameterDefinitionManager;
         private readonly CoreFeatureConfiguration _configuration;
         private readonly ISupportedProfilesStore _supportedProfiles;
+        private readonly ConcurrentDictionary<string, HashSet<string>> _syncedProfiles = new(StringComparer.Ordinal);
 
         private CapabilityStatementBuilder(
             ListedCapabilityStatement statement,
@@ -274,10 +276,24 @@ namespace Microsoft.Health.Fhir.Core.Features.Conformance
                 {
                     if (!_modelInfoProvider.Version.Equals(FhirSpecification.Stu3))
                     {
-                        resourceComponent.SupportedProfile.Clear();
-                        foreach (var profile in supportedProfiles)
+                        // Replace only the profiles added by earlier syncs, so profiles declared by capability providers are kept.
+                        var synced = _syncedProfiles.GetOrAdd(resourceType, _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+                        lock (synced)
                         {
-                            resourceComponent.SupportedProfile.Add(profile);
+                            foreach (var profile in synced)
+                            {
+                                resourceComponent.SupportedProfile.Remove(profile);
+                            }
+
+                            synced.Clear();
+                            foreach (var profile in supportedProfiles)
+                            {
+                                if (!resourceComponent.SupportedProfile.Contains(profile))
+                                {
+                                    resourceComponent.SupportedProfile.Add(profile);
+                                    synced.Add(profile);
+                                }
+                            }
                         }
                     }
                     else
