@@ -40,12 +40,14 @@ How each FHIR version expresses these:
 
 The managed Azure Health Data Services FHIR service runs R4 (4.0.x) and STU3, not R4B ([FAQ](https://learn.microsoft.com/azure/healthcare-apis/fhir/fhir-faq)). **R4 with the Backport IG is therefore the primary target**, and API-defined topics must work on R4.
 
-**Spec conformance minimum** (R5 §3.9.7):
+**Spec conformance minimum** (R5 §3.9.7; Backport IG conformance for R4B, which matches it):
 
 - `Subscription`: read and write. Search is recommended.
 - The `$status` operation.
 - `SubscriptionTopic`: read and search.
 - At least one channel type (preferably a core one) and at least one payload type.
+
+On **R4**, the Backport IG does not require `SubscriptionTopic` read/search, because R4 has no such resource. It asks instead that servers SHOULD support topic discovery through the CapabilityStatement topic-canonical extension. The API-defined R4 topics in 3.2 go beyond the IG.
 
 Delivery is **best-effort** unless a channel defines otherwise. Clients detect gaps through event numbering and heartbeats, and recover through `$status`, `$events`, or re-query.
 
@@ -73,7 +75,7 @@ Legend:
 |---|---|---|
 | Create, read, update, delete and search topics **through the API**, on all supported versions | SHALL read/search; write is MAY | ✅ v1 [2]. **Required.** Writes need the new `SubscriptionTopic` permission (3.7). Topics are rejected if any trigger or filter is unsupported. |
 | R4B/R5: native `SubscriptionTopic` resource | Core | ✅ v1 [2] |
-| R4: topic as a `Basic` resource with `Basic.code` = `http://hl7.org/fhir/fhir-types#SubscriptionTopic`, with the R5 topic elements carried as extensions (searchable as `Basic?code=http://hl7.org/fhir/fhir-types\|SubscriptionTopic`) | Not defined by the IG (server-specific) | ✅ v1 [2]. The ADR publishes a **versioned `StructureDefinition`** for this `Basic` profile (extension URLs and cardinalities), plus a worked create → search → subscribe example. Interoperability with other servers' R4 topic representations is a goal to be tested, not a v1 guarantee. |
+| R4: topic as a `Basic` resource with `Basic.code` = `http://hl7.org/fhir/fhir-types#SubscriptionTopic`, with the R5 topic elements carried as extensions (searchable as `Basic?code=http://hl7.org/fhir/fhir-types\|SubscriptionTopic`) | Not defined by the IG (server-specific). The IG records that HL7 tried a `Basic`-plus-extensions profile and dropped it for low usability. | ✅ v1 [2]. The ADR publishes a **versioned `StructureDefinition`** for this `Basic` profile (extension URLs and cardinalities), plus a worked create → search → subscribe example. Interoperability with other servers' R4 topic representations is a goal to be tested, not a v1 guarantee. |
 | Topics pre-loaded from configuration or packages (for example, IG-defined topics) | Backport IG | ⏳ Later |
 | CapabilityStatement topic advertisement (`capabilitystatement-subscriptiontopic-canonical` extension) | MAY | ✅ v1 [2] |
 | `resourceTrigger.resource`, including multi-resource and `Resource` topics | Core | ✅ v1 [3] |
@@ -137,8 +139,8 @@ Filters and criteria are evaluated **in memory** against the changed resource (a
 | `heartbeat` | Core | ✅ v1 [4] |
 | `query-status` via `$status` (instance and type level) | **SHALL** | ✅ v1 [4] |
 | `query-event` via `$events` (replay past events) | MAY | ⏳ Later [5]. Limited to the server's retention window. |
-| `eventsSinceSubscriptionStart` / `notificationEvent.eventNumber` (gap detection) | Core | ✅ v1 [3-4]. Monotonic per subscription. |
-| `notificationEvent.focus` | Core | ✅ v1 [4] |
+| `eventsSinceSubscriptionStart` / `notificationEvent.eventNumber` (gap detection) | Core | ✅ v1 [3-4]. Monotonic per subscription. Assigned only after the match-time authorization check (3.7), so unauthorized events leave no gap. `Unevaluable` events take a number, so clients detect them as gaps. |
+| `notificationEvent.focus` (absent for `empty`); for `id-only`, each entry carries `fullUrl` and `request`; for `full-resource`, each entry carries the resource, or `request`/`response` when it cannot be included | Core / Backport payloads | ✅ v1 [4]. Checked by profile validation in the release gate. |
 | `notificationEvent.additionalContext` | Core | ⏳ Later [5], with `notificationShape`. |
 | `SubscriptionStatus.error` reporting | Core | ✅ v1 [4] |
 | Error handling: bounded retries with back-off, then `error`; persistent failure, then `off`; client resets to `requested` | SHOULD | ✅ v1 [4]. Undelivered events are **retained** (within the retention window) while in `error`, so they can be delivered after recovery or, later, through `$events`. |
@@ -151,9 +153,9 @@ Filters and criteria are evaluated **in memory** against the changed resource (a
 | Feature | Spec | Support |
 |---|---|---|
 | **Create-time authorization.** On create or update, the subscriber's identity, roles and SMART scopes/compartment are captured as an **authorization snapshot**. The topic and filters must fall within that snapshot (for example, a patient-scoped caller must filter to their own compartment). | SHALL enforce policy | ✅ v1 [2] |
-| **Delivery-time authorization for every event, at every content level** (`empty`, `id-only`, `full-resource`), including retries and status counts. Each event is checked against the stored snapshot; events outside it are never sent. | SHOULD ensure authorization is still in place | ✅ v1 [4]. The server cannot re-validate a token or detect identity-provider revocation without a live request, so the check is against the snapshot, not live authorization. **Revocation** works by: (a) the subscriber or an admin setting `off` or deleting the subscription; (b) a configurable maximum subscription lifetime (enforced by `end`), which forces periodic re-subscription and therefore a fresh snapshot; (c) re-evaluating local role assignments (server RBAC configuration) at delivery time. |
+| **Authorization for every event, at every content level** (`empty`, `id-only`, `full-resource`), including retries and status counts. Each event is checked against the stored snapshot **at matching, before an event number is assigned**, so events outside it are never numbered or sent and leave no gap that would reveal them (R5 §3.9.8). The check runs again at delivery to catch revocation; a gap caused by revocation is acceptable. | SHOULD ensure authorization is still in place | ✅ v1 [4]. The server cannot re-validate a token or detect identity-provider revocation without a live request, so the check is against the snapshot, not live authorization. **Revocation** works by: (a) the subscriber or an admin setting `off` or deleting the subscription; (b) a configurable maximum subscription lifetime (enforced by `end`), which forces periodic re-subscription and therefore a fresh snapshot; (c) re-evaluating local role assignments (server RBAC configuration) at delivery time. |
 | New `DataActions.SubscriptionTopic` permission. It is required whenever **either the existing or the new** resource is a topic (the R4B/R5 `SubscriptionTopic`, or an R4 `Basic` with the topic code), covering create, update, delete and conditional variants. Reading and searching topics needs only `Read`. | Server policy | ✅ v1 [2]. Mirrors the existing `DataActions.SearchParameter` pattern. `DataActions.All` must be extended to include it. |
-| **Registry-time revalidation.** `$import` and bulk update bypass the MediatR validation pipeline, so the registry validates every `Subscription` and topic again (topic, filters, channel, endpoint policy, authorization snapshot) before activating it. Invalid resources are never activated; the server sets the subscription to `error` with a reason. Valid content is not enough: activation also requires a server-owned grant bound to the subscription version and endpoint (design decision 8), so imported subscriptions stay inactive until an authorized caller activates them. | Server policy | ✅ v1 [2]. Prevents server-side request forgery (SSRF) and unauthorized data disclosure through imported subscriptions. |
+| **Registry-time revalidation.** `$import` and bulk update bypass the MediatR validation pipeline, so the registry validates every `Subscription` and topic again (topic, filters, channel, endpoint policy, authorization snapshot) before activating it. Invalid resources are never activated; the server sets the subscription to `error` with a reason. Valid content is not enough: activation also requires a server-owned grant bound to the subscription version and endpoint (design decision 8), so imported subscriptions are not activated until an authorized caller activates them. The stored status reflects this (`off`, or `error` with a reason in `SubscriptionStatus.error`), so reads and `$status` never report `active` for a subscription that is not delivering. | Server policy | ✅ v1 [2]. Prevents server-side request forgery (SSRF) and unauthorized data disclosure through imported subscriptions. |
 | HTTPS-only endpoints, a configurable endpoint allow-list, and blocking of private and link-local addresses | Recommended | ✅ v1 [2] |
 | Restricting `full-resource` per client or role | MAY | ✅ v1 [4] (configuration) |
 | Tracking sent notifications as `AuditEvent`/`Communication` resources | Encouraged | ❌ No. Uses the server's existing audit logging and telemetry instead. |
@@ -226,12 +228,13 @@ flowchart TB
     EP -->|"read exact versions<br/>(IncludeHistory = 1)"| TX
     EP --> REG["ActiveSubscriptionRegistry<br/>(revalidated, activation watermark)"]
     EP --> EV["In-memory matcher<br/>search + FHIRPath"]
+    EP --> AM{"Authorize vs snapshot<br/>(before numbering)"}
     EP -->|"one SQL transaction:<br/>events + cursor"| OB[("dbo.SubscriptionEvents<br/>+ Parameters: Subscriptions.Cursor")]
   end
 
   subgraph S3["Delivery (job queue, single-flight per subscription)"]
     OB --> DJ["SubscriptionDeliveryJob<br/>lease per subscription"]
-    DJ --> AZ{"Authorize event<br/>vs snapshot"}
+    DJ --> AZ{"Re-check authorization<br/>(revocation)"}
     AZ --> CH{"ISubscriptionChannel"}
     CH --> RH["rest-hook (v1)"]
     CH --> EG["Azure channels (later)"]
@@ -262,13 +265,13 @@ The choice between the two is open for product group guidance, and is recorded i
    - Matching output (`SubscriptionEvents` rows) and the cursor advance are written in **one SQL transaction**. A crash before commit replays the batch; a crash after commit does not.
    - `SubscriptionEvents` has a unique key on `(SubscriptionId, TransactionId, ResourceTypeId, ResourceSurrogateId)`, so a replayed batch cannot create duplicate events or consume extra event numbers. This guarantees one **logical** event per match; it does not prevent the same notification being delivered more than once (decision 7).
    - Required tests: a backlog of more than 10,000 transactions, and a process kill between matching and commit.
-3. **Version-exact matching.** The matcher reads each transaction with `@IncludeHistory = 1` and evaluates **the exact version written by that transaction**, even if it is already historical. The previous version for `queryCriteria.previous` / `%previous` is the immediately preceding version by `(type, id, version - 1)`. If either version is unavailable (for example, removed by history cleanup), the event is **not silently dropped**: it is recorded with `Status = Unevaluable` and surfaced through `SubscriptionStatus.error` and metrics. `InvisibleHistoryCleanupWatchdog` must not remove history newer than the subscription cursor.
+3. **Version-exact matching.** The matcher reads each transaction with `@IncludeHistory = 1` and evaluates **the exact version written by that transaction**, even if it is already historical. The previous version for `queryCriteria.previous` / `%previous` is the immediately preceding version by `(type, id, version - 1)`. If either version is unavailable (for example, removed by history cleanup), the event is **not silently dropped**: it is recorded with `Status = Unevaluable` and surfaced through `SubscriptionStatus.error` and metrics. `Unevaluable` events are created only for subscriptions whose topic covers that resource type and interaction and whose authorization snapshot covers that resource type. They take an event number but are not delivered, so the client sees a gap and recovers (R5 §3.9.10.2). `InvisibleHistoryCleanupWatchdog` must not remove history newer than the subscription cursor.
    - **History configuration limit.** The cleanup gate protects only history the server keeps. When `KeepHistory` is false for a write (a resource type with `no-version` versioning, or a metadata-only update with meta history disabled), `MergeResources` replaces the previous row's body with an "invisible" marker when change capture is on, or **deletes the row in the same write** when it is off. In the first case the event can be recorded as `Unevaluable`; in the second the earlier version leaves no trace and would be lost silently. The product group decides between requiring history for resource types used by subscriptions, or documenting a weaker guarantee for those types. Required test: two rapid updates to a resource type with history disabled, with change capture both on and off.
 4. **Activation watermark.** When a subscription becomes `active` (after handshake), the server records the current visibility watermark as its `ActivationTransactionId`. It matches only transactions **after** that point, so a new subscription never receives earlier changes. Topic updates and subscription `off`/delete take effect for transactions after the change is visible; batches already matched keep their results.
 5. **In-memory matching** through a new evaluator in `Core/Features/Search/InMemory`, reusing `ISearchIndexer`/`ISearchOptionsFactory` and `IFhirPathProvider`. Unsupported criteria are rejected when the subscription or topic is written (3.4).
 6. **Durable per-subscription outbox.** A new `dbo.SubscriptionEvents` table stores `(SubscriptionId, EventNumber, TransactionId, ResourceTypeId, ResourceSurrogateId, ResourceVersion, Interaction, Status, Attempts, NextAttemptDate)`. It provides stable event numbers, retries with back-off, retention for later replay, and isolation between endpoints.
 7. **Single-flight delivery.** At most one notification is in flight per subscription, which preserves `eventNumber` order. A delivery lease per subscription prevents two workers sending concurrently.
-8. **Registry with revalidation.** Active subscriptions and topics are cached per instance. The cache refreshes when a `Subscription` or topic change is seen, and periodically through the cache-sync pattern. Every resource is revalidated on load (3.7), because `$import` and bulk paths bypass write-time validation. Revalidation checks content, not who authorized it: a subscription is activated only when it has a server-owned **activation grant** (the authorization snapshot) bound to its current version and endpoint. Subscriptions written or changed without one, including through `$import` or bulk operations, stay inactive (no handshake, no notifications) until an authorized caller activates them through the API.
+8. **Registry with revalidation.** Active subscriptions and topics are cached per instance. The cache refreshes when a `Subscription` or topic change is seen, and periodically through the cache-sync pattern. Every resource is revalidated on load (3.7), because `$import` and bulk paths bypass write-time validation. Revalidation checks content, not who authorized it: a subscription is activated only when it has a server-owned **activation grant** (the authorization snapshot) bound to its current version and endpoint. Subscriptions written or changed without one, including through `$import` or bulk operations, are not activated (no handshake, no notifications) until an authorized caller activates them through the API. The server sets their status to `off`, or `error` with a reason, so the stored status never claims `active`.
 9. **Loop prevention.** Writes the subscription engine makes to `Subscription` resources (status, error, event counts) are tagged and excluded from matching.
 10. **Canonical internal model.** An R5-shaped internal model is used for all versions, with converters for R4 Backport, R4B and R5, following the Backport IG recommendation to use R5 definitions internally. On R4, `SubscriptionTopic` is converted to and from `Basic` (topic code plus extensions).
 11. **Opt-in.** `Subscriptions:Enabled` defaults to `false` and is independent of `SupportsResourceChangeCapture`. SQL Server only.
@@ -294,7 +297,7 @@ The choice between the two is open for product group guidance, and is recorded i
 
 **v1 release gate:**
 
-- E2E tests against a local webhook receiver for R4 Backport, R4B and R5 payloads (`Parameters` vs `SubscriptionStatus` as the first entry), validated against the Backport and R5 profiles.
+- E2E tests against a local webhook receiver for R4 Backport, R4B and R5 payloads (`Parameters` vs `SubscriptionStatus` as the first entry), validated against the Backport and R5 profiles, for every content level (`empty` has no focus; `id-only` entries carry `fullUrl` and `request`).
 - Handshake transitions: success → `active`; failure → `error`.
 - Backlog over 10,000 transactions and crash-replay tests pass.
 - Load test (`tools/PerfTester`) results, including head-of-line latency during `$import`, meet the phase 0 target.
