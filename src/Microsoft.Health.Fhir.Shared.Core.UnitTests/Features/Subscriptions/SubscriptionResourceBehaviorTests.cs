@@ -75,6 +75,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
                 accessor);
         }
 
+#if !Stu3
         [Fact]
         public async Task GivenATopic_WhenCreatedWithoutTheSubscriptionTopicPermission_ThenItIsRejected()
         {
@@ -217,6 +218,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             Assert.NotNull(await UpsertAsync(ordinary.ToResourceElement()));
         }
 #endif
+#endif
 
         [Fact]
         public async Task GivenTheFeatureIsDisabled_WhenAnythingIsWritten_ThenItPassesThroughUnchecked()
@@ -225,6 +227,23 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
 
             Assert.NotNull(await CreateAsync(Parse(SubscriptionResources.Subscription("http://example.org/none", "http://10.0.0.1/"))));
         }
+
+#if Stu3
+        [Fact]
+        public async Task GivenStu3WithTheFeatureEnabled_WhenASubscriptionIsWritten_ThenItPassesThroughUnchangedWithoutAGrant()
+        {
+            // Arrange
+            ResourceElement subscription = Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, status: "active"));
+
+            // Act
+            ResourceElement written = null;
+            await CreateAsync(subscription, r => written = r);
+
+            // Assert
+            Assert.Equal("active", written.Scalar<string>("Resource.status"));
+            Assert.Empty(_store.States);
+        }
+#endif
 
         private System.Threading.Tasks.Task<UpsertResourceResponse> CreateAsync(ResourceElement resource, Action<ResourceElement> capture = null)
         {

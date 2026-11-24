@@ -3,6 +3,7 @@
 // Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
 // -------------------------------------------------------------------------------------------------
 
+#if !Stu3
 using System;
 using System.Linq;
 using System.Threading;
@@ -305,3 +306,4 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         private static ResourceElement Parse(string json) => new FhirJsonParser().Parse<Resource>(json).ToResourceElement();
     }
 }
+#endif

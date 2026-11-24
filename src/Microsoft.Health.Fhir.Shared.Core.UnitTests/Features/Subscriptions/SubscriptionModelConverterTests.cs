@@ -24,6 +24,13 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         private const string TopicUrl = "http://example.org/fhir/SubscriptionTopic/encounter-cancelled";
         private readonly SubscriptionModelConverter _converter = new();
 
+#if Stu3
+        [Fact]
+        public void GivenStu3_WhenAskedIfSubscriptionsAreSupported_ThenTheyAreNot()
+        {
+            Assert.False(_converter.IsSupported);
+        }
+#else
         [Fact]
         public void GivenATopicResource_WhenConverted_ThenTriggersAndFiltersAreRead()
         {
@@ -145,6 +152,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         {
             Assert.Throws<SubscriptionValidationException>(() => _converter.ToSubscription(Parse(SubscriptionResources.Subscription(TopicUrl, "https://hooks.example.com/notify", content: "everything"))));
         }
+#endif
 #endif
 
         private static ResourceElement Parse(string json) => new FhirJsonParser().Parse<Resource>(json).ToResourceElement();

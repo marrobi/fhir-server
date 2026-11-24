@@ -3,6 +3,7 @@
 // Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
 // -------------------------------------------------------------------------------------------------
 
+#if !Stu3
 using System;
 using System.Linq;
 using Hl7.Fhir.Model;
@@ -149,3 +150,4 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         }).ToArray();
     }
 }
+#endif

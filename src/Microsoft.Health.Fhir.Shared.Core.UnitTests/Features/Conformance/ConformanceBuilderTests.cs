@@ -121,6 +121,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Conformance
             Assert.True(patientResource.Versioning == CapabilityStatement.ResourceVersionPolicy.NoVersion);
         }
 
+#if !Stu3
         [Fact]
         public async System.Threading.Tasks.Task GivenAProfileDeclaredByACapabilityProvider_WhenProfilesAreSynced_ThenItIsKeptAndStaleSyncedProfilesAreRemoved()
         {
@@ -152,6 +153,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Conformance
             Assert.Contains("http://example.org/new", patient.SupportedProfile);
             Assert.DoesNotContain("http://example.org/old", patient.SupportedProfile);
         }
+#endif
 
         [Fact]
         public void GivenAConformanceBuilder_WhenResourceTypeOverridesContainsResourcesThatDontMatch_ThenResourceUsesDefaultVersionLogic()
