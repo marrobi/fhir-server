@@ -27,12 +27,23 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Authorization
         private const DataActions ReadActions = DataActions.Read | DataActions.ReadById | DataActions.Search;
 
         private readonly SecurityConfiguration _securityConfiguration;
+        private readonly AuthorizationConfiguration _authorizationConfiguration;
         private readonly InMemorySearchEvaluator _searchEvaluator;
 
-        public SubscriptionAuthorizer(IOptions<SecurityConfiguration> securityConfiguration, InMemorySearchEvaluator searchEvaluator)
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SubscriptionAuthorizer"/> class.
+        /// </summary>
+        /// <param name="securityConfiguration">The security configuration.</param>
+        /// <param name="searchEvaluator">The in-memory search evaluator used for compartment and scope checks.</param>
+        /// <param name="authorizationConfiguration">
+        /// The registered authorization configuration, which is the instance <see cref="RoleLoader"/> populates with roles.
+        /// It can be a different instance from <see cref="SecurityConfiguration.Authorization"/>, which is used when none is registered.
+        /// </param>
+        public SubscriptionAuthorizer(IOptions<SecurityConfiguration> securityConfiguration, InMemorySearchEvaluator searchEvaluator, AuthorizationConfiguration authorizationConfiguration = null)
         {
             _securityConfiguration = EnsureArg.IsNotNull(securityConfiguration?.Value, nameof(securityConfiguration));
             _searchEvaluator = EnsureArg.IsNotNull(searchEvaluator, nameof(searchEvaluator));
+            _authorizationConfiguration = authorizationConfiguration ?? _securityConfiguration.Authorization;
         }
 
         /// <summary>
@@ -48,7 +59,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Authorization
 
             ClaimsPrincipal principal = requestContext.Principal;
             AccessControlContext accessControl = requestContext.AccessControlContext ?? new AccessControlContext();
-            string rolesClaim = _securityConfiguration.Authorization.RolesClaim;
+            string rolesClaim = _authorizationConfiguration.RolesClaim;
 
             return new SubscriptionGrant
             {
@@ -157,7 +168,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Authorization
             DataActions permitted = DataActions.None;
             foreach (string roleName in grant.Roles)
             {
-                Role role = _securityConfiguration.Authorization.Roles.FirstOrDefault(r => string.Equals(r.Name, roleName, StringComparison.OrdinalIgnoreCase));
+                Role role = _authorizationConfiguration.Roles.FirstOrDefault(r => string.Equals(r.Name, roleName, StringComparison.OrdinalIgnoreCase));
                 if (role != null)
                 {
                     permitted |= role.AllowedDataActions;

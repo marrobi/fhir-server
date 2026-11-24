@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.Security.Claims;
 using Hl7.Fhir.Model;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
 using Microsoft.Health.Fhir.Core.Configs;
 using Microsoft.Health.Fhir.Core.Features.Context;
@@ -64,6 +65,24 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             Assert.True(_fixture.CreateAuthorizer(Security(new Role("reader", DataActions.Read, "/"))).IsAuthorized(grant, observation));
             Assert.False(_fixture.CreateAuthorizer(Security(new Role("reader", DataActions.Write, "/"))).IsAuthorized(grant, observation));
             Assert.False(_fixture.CreateAuthorizer(Security()).IsAuthorized(grant, observation));
+        }
+
+        [Fact]
+        public void GivenRolesLoadedIntoTheRegisteredAuthorizationConfiguration_WhenCheckingAccess_ThenThoseRolesApply()
+        {
+            // Arrange: the development identity provider registers its own AuthorizationConfiguration, and RoleLoader fills that instance.
+            SecurityConfiguration security = Security();
+            var registered = new AuthorizationConfiguration { Enabled = true, Roles = [new Role("reader", DataActions.Read, "/")] };
+            var authorizer = new SubscriptionAuthorizer(Options.Create(security), _fixture.SearchEvaluator, registered);
+            SubscriptionGrant grant = authorizer.CreateGrant(Context(roles: ["reader"]), "hash");
+
+            // Act
+            bool canRead = authorizer.CanRead(grant, "Observation");
+            bool authorized = authorizer.IsAuthorized(grant, SubscriptionTestFixture.Snapshot(InMemorySearchEvaluatorTests.CreateObservation()));
+
+            // Assert
+            Assert.True(canRead);
+            Assert.True(authorized);
         }
 
         [Fact]

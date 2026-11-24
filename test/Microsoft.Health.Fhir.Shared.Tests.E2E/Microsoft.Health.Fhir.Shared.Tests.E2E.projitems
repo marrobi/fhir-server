@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
     <MSBuildAllProjects>$(MSBuildAllProjects);$(MSBuildThisFileFullPath)</MSBuildAllProjects>
@@ -105,6 +105,12 @@
     <Compile Include="$(MSBuildThisFileDirectory)Rest\Search\CustomSearchParamTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Rest\RequiresIsolatedDatabaseAttribute.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Rest\RequiresTrustedForwardersAttribute.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Rest\RequiresSubscriptionsAttribute.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Rest\Subscriptions\ReceivedNotification.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Rest\Subscriptions\StartupWithSubscriptions.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Rest\Subscriptions\SubscriptionsTestFixture.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Rest\Subscriptions\SubscriptionTests.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Rest\Subscriptions\WebhookReceiver.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Rest\ForwardedHeaders\SmartScopeForwardedHeadersTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Rest\ForwardedHeaders\StartupWithTrustedForwarders.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Rest\ForwardedHeaders\TrustedForwardersTestFixture.cs" />

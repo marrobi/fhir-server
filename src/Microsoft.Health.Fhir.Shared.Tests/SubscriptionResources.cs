@@ -8,13 +8,13 @@ using Microsoft.Health.Fhir.Core.Features.Subscriptions;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching;
 using Newtonsoft.Json.Linq;
 
-namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
+namespace Microsoft.Health.Fhir.Tests.Common
 {
     /// <summary>
     /// Builds topic and subscription resources in the wire shape of the FHIR version under test
     /// (R4: Basic topic + Backport subscription; R4B: SubscriptionTopic + Backport subscription; R5: native).
     /// </summary>
-    internal static class SubscriptionResources
+    public static class SubscriptionResources
     {
         public static string Topic(string url, string id = "t1")
         {
