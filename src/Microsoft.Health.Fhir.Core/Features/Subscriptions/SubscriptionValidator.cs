@@ -11,6 +11,7 @@ using System.Net.Http.Headers;
 using EnsureThat;
 using Microsoft.Extensions.Options;
 using Microsoft.Health.Fhir.Core.Configs;
+using Microsoft.Health.Fhir.Core.Extensions;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Channels;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
@@ -147,6 +148,26 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             }
 
             return errors;
+        }
+
+        /// <summary>
+        /// Validates that a stored subscription has an <c>end</c> within the maximum lifetime. API writes set <c>end</c>, so this
+        /// catches subscriptions written another way (for example, by <c>$import</c>) that remove or extend it.
+        /// </summary>
+        /// <param name="subscription">The subscription.</param>
+        /// <returns>The validation errors; empty when valid.</returns>
+        public IReadOnlyList<string> ValidateLifetime(SubscriptionInfo subscription)
+        {
+            EnsureArg.IsNotNull(subscription, nameof(subscription));
+
+            // A small allowance covers clock differences between the writing and the reading instance.
+            if (_configuration.MaxLifetimeDays > 0 &&
+                (subscription.End == null || subscription.End.Value > Clock.UtcNow.AddDays(_configuration.MaxLifetimeDays).AddHours(1)))
+            {
+                return [string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionEndBeyondMaximum, _configuration.MaxLifetimeDays)];
+            }
+
+            return [];
         }
 
         /// <summary>

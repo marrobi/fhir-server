@@ -1,7 +1,8 @@
 --DROP PROCEDURE dbo.SaveSubscriptionGrant
 GO
 -- Stores the activation grant of a subscription. A different content hash clears the activation watermark, so the
--- subscription is not matched again until it completes a new handshake.
+-- subscription is not matched again until it completes a new handshake. Pending events matched under the previous content
+-- (filters, endpoint, authorization) are marked not authorized, so they are never sent under the new content.
 CREATE PROCEDURE dbo.SaveSubscriptionGrant @SubscriptionId varchar(64), @ContentHash varchar(64), @GrantJson nvarchar(max)
 AS
 set nocount on
@@ -12,6 +13,16 @@ DECLARE @SP varchar(100) = object_name(@@procid)
 
 BEGIN TRY
   BEGIN TRANSACTION
+
+  -- Lock the state row before the events, in the same order as EnqueueSubscriptionEvents, to avoid deadlocks.
+  DECLARE @PreviousHash varchar(64) = (SELECT ContentHash FROM dbo.SubscriptionStates WITH (UPDLOCK, HOLDLOCK) WHERE SubscriptionId = @SubscriptionId)
+
+  IF isnull(@PreviousHash, '') <> @ContentHash
+    UPDATE dbo.SubscriptionEvents
+      SET Status = 3
+         ,StatusDate = getUTCdate()
+      WHERE SubscriptionId = @SubscriptionId
+        AND Status = 0
 
   UPDATE dbo.SubscriptionStates WITH (UPDLOCK, HOLDLOCK)
     SET ActivationTransactionId = CASE WHEN ContentHash = @ContentHash THEN ActivationTransactionId ELSE NULL END

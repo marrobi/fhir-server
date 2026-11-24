@@ -36,6 +36,15 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
 
         public long Visibility { get; set; } = 1000;
 
+        public SubscriptionStoreAvailability Availability { get; set; } = SubscriptionStoreAvailability.Available;
+
+        public List<(string SubscriptionId, string Worker, TimeSpan Period)> LeaseRequests { get; } = [];
+
+        /// <summary>
+        /// Gets or sets a worker that takes over the lease the next time its holder tries to renew it.
+        /// </summary>
+        public string LeaseTakenOnRenewal { get; set; }
+
         public Task<IReadOnlyList<SubscriptionState>> GetStatesAsync(CancellationToken cancellationToken)
         {
             lock (_sync)
@@ -57,6 +66,11 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             lock (_sync)
             {
                 SubscriptionState current = States.GetValueOrDefault(subscriptionId);
+                if (current != null && current.ContentHash != contentHash)
+                {
+                    RetirePending(subscriptionId);
+                }
+
                 States[subscriptionId] = new SubscriptionState
                 {
                     SubscriptionId = subscriptionId,
@@ -102,20 +116,50 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             }
         }
 
-        public Task DeactivateAsync(string subscriptionId, CancellationToken cancellationToken)
+        public Task DeactivateAsync(string subscriptionId, bool revokeGrant, CancellationToken cancellationToken)
         {
             lock (_sync)
             {
                 Update(subscriptionId, s => With(s, activation: null, clearActivation: true));
+                if (revokeGrant && States.TryGetValue(subscriptionId, out SubscriptionState state))
+                {
+                    States[subscriptionId] = new SubscriptionState
+                    {
+                        SubscriptionId = state.SubscriptionId,
+                        LastEventNumber = state.LastEventNumber,
+                        LastNotificationUtc = state.LastNotificationUtc,
+                        Error = state.Error,
+                    };
+                    RetirePending(subscriptionId);
+                }
             }
 
             return Task.CompletedTask;
+        }
+
+        private void RetirePending(string subscriptionId)
+        {
+            for (int i = 0; i < Events.Count; i++)
+            {
+                if (Events[i].SubscriptionId == subscriptionId && Events[i].Status == SubscriptionEventStatus.Pending)
+                {
+                    Events[i] = WithEvent(Events[i], status: SubscriptionEventStatus.NotAuthorized);
+                }
+            }
         }
 
         public Task<bool> TryAcquireLeaseAsync(string subscriptionId, string worker, TimeSpan leasePeriod, CancellationToken cancellationToken)
         {
             lock (_sync)
             {
+                LeaseRequests.Add((subscriptionId, worker, leasePeriod));
+                if (LeaseTakenOnRenewal != null && Leases.TryGetValue(subscriptionId, out var held) && held.Worker == worker)
+                {
+                    Leases[subscriptionId] = (LeaseTakenOnRenewal, Clock.UtcNow.AddHours(1));
+                    LeaseTakenOnRenewal = null;
+                    return Task.FromResult(false);
+                }
+
                 if (Leases.TryGetValue(subscriptionId, out var lease) && lease.Worker != worker && lease.End > Clock.UtcNow)
                 {
                     return Task.FromResult(false);

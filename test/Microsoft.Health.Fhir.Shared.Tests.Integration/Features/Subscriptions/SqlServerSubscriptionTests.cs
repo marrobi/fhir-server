@@ -84,7 +84,7 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
             await AdvanceVisibilityAsync();
 
             long second = await Store.ActivateAsync("s1", CancellationToken.None);
-            await Store.DeactivateAsync("s1", CancellationToken.None);
+            await Store.DeactivateAsync("s1", revokeGrant: false, CancellationToken.None);
             long third = await Store.ActivateAsync("s1", CancellationToken.None);
 
             Assert.Equal(first, second);
@@ -134,6 +134,102 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
             await Store.EnqueueAsync([], 400, CancellationToken.None);
 
             Assert.Equal(500, await Store.GetCursorAsync(CancellationToken.None));
+        }
+
+        [Fact]
+        public async Task GivenASubscriptionActivatedAfterTheStatesWereRead_WhenEventsAreEnqueued_ThenNothingIsWrittenAndTheCallerMustRetry()
+        {
+            // Arrange: the pump reads the counter, then a handshake activates s2 before the pump commits.
+            await Store.SaveGrantAsync("s1", "h", "{}", CancellationToken.None);
+            await Store.ActivateAsync("s1", CancellationToken.None);
+            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100 WHERE SubscriptionId = 's1'");
+            await Store.EnqueueAsync([], 100, CancellationToken.None);
+            long version = await Store.GetActivationVersionAsync(CancellationToken.None);
+            await Store.SaveGrantAsync("s2", "h", "{}", CancellationToken.None);
+            await Store.ActivateAsync("s2", CancellationToken.None);
+            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100 WHERE SubscriptionId = 's2'");
+
+            // Act
+            bool committed = await Store.EnqueueAsync([Candidate("s1", 101, 1)], SqlServerSubscriptionStore.CursorId, 101, version, CancellationToken.None);
+            bool retried = await Store.EnqueueAsync([Candidate("s1", 101, 1)], SqlServerSubscriptionStore.CursorId, 101, await Store.GetActivationVersionAsync(CancellationToken.None), CancellationToken.None);
+
+            // Assert
+            Assert.False(committed);
+            Assert.True(retried);
+            Assert.Single(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None));
+            Assert.Equal(101, await Store.GetCursorAsync(CancellationToken.None));
+        }
+
+        [Fact]
+        public async Task GivenPendingEvents_WhenTheSubscriptionContentChanges_ThenTheyAreRetiredAndNeverSentUnderTheNewContent()
+        {
+            // Arrange
+            await Store.SaveGrantAsync("s1", "h1", "{}", CancellationToken.None);
+            await Store.ActivateAsync("s1", CancellationToken.None);
+            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100 WHERE SubscriptionId = 's1'");
+            await Store.EnqueueAsync([Candidate("s1", 101, 1), Candidate("s1", 102, 2)], 102, CancellationToken.None);
+
+            // Act: an API update changes the endpoint, so the hash changes.
+            await Store.SaveGrantAsync("s1", "h2", "{}", CancellationToken.None);
+            await Store.ActivateAsync("s1", CancellationToken.None);
+            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100 WHERE SubscriptionId = 's1'");
+
+            // Assert
+            Assert.Empty(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None));
+            Assert.Equal(2, ExecuteScalar<int>("SELECT count(*) FROM dbo.SubscriptionEvents WHERE SubscriptionId = 's1' AND Status = 3"));
+        }
+
+        [Fact]
+        public async Task GivenPendingEvents_WhenTheSameContentIsSavedAgain_ThenTheyStayPending()
+        {
+            await Store.SaveGrantAsync("s1", "h1", "{}", CancellationToken.None);
+            await Store.ActivateAsync("s1", CancellationToken.None);
+            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100 WHERE SubscriptionId = 's1'");
+            await Store.EnqueueAsync([Candidate("s1", 101, 1)], 101, CancellationToken.None);
+
+            await Store.SaveGrantAsync("s1", "h1", "{}", CancellationToken.None);
+
+            Assert.Single(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None));
+        }
+
+        [Fact]
+        public async Task GivenAnActivatedSubscription_WhenDeactivatedWithRevocation_ThenTheGrantIsRemovedAndPendingEventsAreRetired()
+        {
+            // Arrange
+            await Store.SaveGrantAsync("s1", "h1", "{\"ContentHash\":\"h1\"}", CancellationToken.None);
+            await Store.ActivateAsync("s1", CancellationToken.None);
+            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100 WHERE SubscriptionId = 's1'");
+            await Store.EnqueueAsync([Candidate("s1", 101, 1)], 101, CancellationToken.None);
+
+            // Act
+            await Store.DeactivateAsync("s1", revokeGrant: true, CancellationToken.None);
+
+            // Assert
+            SubscriptionState state = await Store.GetStateAsync("s1", CancellationToken.None);
+            Assert.Null(state.ActivationTransactionId);
+            Assert.Null(state.Grant);
+            Assert.Null(state.ContentHash);
+            Assert.Empty(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None));
+        }
+
+        [Fact]
+        public async Task GivenPendingEvents_WhenDueSubscriptionsAreListed_ThenOnlyActivatedSubscriptionsWithADueEventAreReturned()
+        {
+            // Arrange: s1 is activated with a due event; s2 has a pending event but was deactivated (no revocation).
+            await Store.SaveGrantAsync("s1", "h", "{}", CancellationToken.None);
+            await Store.ActivateAsync("s1", CancellationToken.None);
+            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100 WHERE SubscriptionId = 's1'");
+            await Store.SaveGrantAsync("s2", "h", "{}", CancellationToken.None);
+            await Store.ActivateAsync("s2", CancellationToken.None);
+            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100 WHERE SubscriptionId = 's2'");
+            await Store.EnqueueAsync([Candidate("s1", 101, 1), Candidate("s2", 101, 2)], 101, CancellationToken.None);
+            await Store.DeactivateAsync("s2", revokeGrant: false, CancellationToken.None);
+
+            // Act
+            IReadOnlyList<string> due = await Store.GetSubscriptionsWithDueEventsAsync(CancellationToken.None);
+
+            // Assert
+            Assert.Equal(["s1"], due);
         }
 
         [Fact]

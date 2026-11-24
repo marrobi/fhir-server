@@ -13,17 +13,20 @@ using Hl7.Fhir.Serialization;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
+using Microsoft.Health.Abstractions.Exceptions;
 using Microsoft.Health.Core.Features.Context;
 using Microsoft.Health.Core.Features.Security.Authorization;
 using Microsoft.Health.Fhir.Core.Configs;
 using Microsoft.Health.Fhir.Core.Exceptions;
 using Microsoft.Health.Fhir.Core.Extensions;
 using Microsoft.Health.Fhir.Core.Features.Context;
+using Microsoft.Health.Fhir.Core.Features.Operations;
 using Microsoft.Health.Fhir.Core.Features.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Security;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Authorization;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry;
 using Microsoft.Health.Fhir.Core.Messages.Create;
 using Microsoft.Health.Fhir.Core.Messages.Delete;
@@ -174,6 +177,53 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             _resources.Put(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "b")));
 
             await Assert.ThrowsAsync<BadRequestException>(() => CreateAsync(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint))));
+        }
+
+        [Fact]
+        public async Task GivenTheActiveSubscriptionLimit_WhenAnOffSubscriptionIsRequestedAgain_ThenItIsRejected()
+        {
+            // Arrange: at the limit, with an off subscription that does not count towards it.
+            _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
+            _resources.Put(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "a")));
+            _resources.Put(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "b")));
+            _resources.Put(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "c", status: "off")));
+
+            // Act and assert
+            await Assert.ThrowsAsync<BadRequestException>(() => UpsertAsync(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "c"))));
+        }
+
+        [Fact]
+        public async Task GivenASubscriptionWithAGrant_WhenTheClientSetsOff_ThenTheGrantIsRevokedSoItCannotBeReactivatedWithoutTheApi()
+        {
+            // Arrange
+            _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
+            await UpsertAsync(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "s1")));
+            Assert.NotNull(_store.States["s1"].Grant);
+
+            // Act
+            await UpsertAsync(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "s1", status: "off")));
+
+            // Assert
+            Assert.Null(_store.States["s1"].Grant);
+            Assert.Null(_store.States["s1"].ContentHash);
+        }
+
+        [Theory]
+        [InlineData(SubscriptionStoreAvailability.NotSupported, typeof(OperationNotImplementedException))]
+        [InlineData(SubscriptionStoreAvailability.NotReady, typeof(ServiceUnavailableException))]
+        public async Task GivenTheStoreIsUnavailable_WhenASubscriptionIsWritten_ThenItIsRejectedWithoutWriting(SubscriptionStoreAvailability availability, Type expected)
+        {
+            // Arrange
+            _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
+            _store.Availability = availability;
+            bool written = false;
+
+            // Act
+            Exception ex = await Record.ExceptionAsync(() => CreateAsync(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint)), _ => written = true));
+
+            // Assert
+            Assert.IsType(expected, ex);
+            Assert.False(written);
         }
 
         [Fact]

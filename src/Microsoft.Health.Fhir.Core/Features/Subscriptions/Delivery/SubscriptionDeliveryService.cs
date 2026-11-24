@@ -40,6 +40,12 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
     {
         private const int MaxNotificationsPerLease = 50;
 
+        // Added to a send's timeout when renewing the lease, so the lease outlives the send and the status writes after it.
+        private static readonly TimeSpan LeaseMargin = TimeSpan.FromSeconds(30);
+
+        // An API write commits the subscription before its grant; within this period a missing grant is not yet treated as unauthorized.
+        private static readonly TimeSpan GrantGracePeriod = TimeSpan.FromMinutes(1);
+
         private readonly SubscriptionsConfiguration _configuration;
         private readonly SubscriptionRegistry _registry;
         private readonly ISubscriptionStore _store;
@@ -124,6 +130,12 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
         /// <returns>A task.</returns>
         public async Task RunOnceAsync(CancellationToken cancellationToken)
         {
+            if (_store.Availability != SubscriptionStoreAvailability.Available)
+            {
+                // For example, while the database schema is upgraded to the version with subscription storage.
+                return;
+            }
+
             SetBackgroundRequestContext();
 
             SubscriptionRegistrySnapshot snapshot = await _registry.GetAsync(TimeSpan.FromSeconds(_configuration.RegistryRefreshIntervalSeconds), cancellationToken);
@@ -170,7 +182,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
             SubscriptionStatusCode status = subscription.Info.Status;
             if (status is SubscriptionStatusCode.Off or SubscriptionStatusCode.EnteredInError)
             {
-                return state?.ActivationTransactionId != null;
+                return state?.ActivationTransactionId != null || state?.Grant != null;
             }
 
             if (!subscription.IsValid)
@@ -265,7 +277,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
 
             if (info.Status is SubscriptionStatusCode.Off or SubscriptionStatusCode.EnteredInError)
             {
-                await DeactivateAsync(info.Id, state, cancellationToken);
+                await DeactivateAsync(info.Id, state, cancellationToken, revokeGrant: true);
                 return;
             }
 
@@ -278,6 +290,12 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
 
             if (!subscription.HasValidGrant)
             {
+                if (info.Status == SubscriptionStatusCode.Requested && resource.LastUpdated is DateTimeOffset written && Clock.UtcNow - written < GrantGracePeriod)
+                {
+                    // The grant of an API write is saved just after the resource; wait for it rather than turning the subscription off.
+                    return;
+                }
+
                 await DeactivateAsync(info.Id, state, cancellationToken);
                 await SetStatusAsync(info, SubscriptionStatusCode.Off, Core.Resources.SubscriptionNotAuthorizedForContent, cancellationToken);
                 return;
@@ -285,7 +303,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
 
             if (info.End.HasValue && info.End.Value <= Clock.UtcNow)
             {
-                await DeactivateAsync(info.Id, state, cancellationToken);
+                await DeactivateAsync(info.Id, state, cancellationToken, revokeGrant: true);
                 await SetStatusAsync(info, SubscriptionStatusCode.Off, Core.Resources.SubscriptionEnded, cancellationToken);
                 return;
             }
@@ -319,6 +337,11 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
                     BaseUri = GetBaseUri(subscription),
                 },
                 cancellationToken);
+
+            if (result == null)
+            {
+                return;
+            }
 
             if (!result.Succeeded)
             {
@@ -394,6 +417,11 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
                     },
                     cancellationToken);
 
+                if (result == null)
+                {
+                    return;
+                }
+
                 List<long> numbers = authorized.Select(e => e.EventNumber).ToList();
                 if (result.Succeeded)
                 {
@@ -433,6 +461,11 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
                     },
                     cancellationToken);
 
+                if (heartbeat == null)
+                {
+                    return;
+                }
+
                 if (heartbeat.Succeeded)
                 {
                     await _store.SetLastNotificationAsync(info.Id, Clock.UtcNow, cancellationToken);
@@ -444,11 +477,24 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
             }
         }
 
+        /// <summary>
+        /// Sends a notification, first renewing the lease. Returns null when the lease was lost: the caller must stop, because
+        /// another worker now owns the subscription.
+        /// </summary>
         private async Task<ChannelDeliveryResult> SendAsync(RegisteredSubscription subscription, SubscriptionNotificationRequest request, CancellationToken cancellationToken)
         {
             if (!_channels.TryGetValue(subscription.Info.ChannelType, out ISubscriptionChannel channel))
             {
                 return ChannelDeliveryResult.Failure(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionChannelNotSupported, subscription.Info.ChannelType));
+            }
+
+            // Renew the lease for longer than this send can take, so no other worker sends for the subscription meanwhile.
+            int timeoutSeconds = subscription.Info.TimeoutSeconds ?? _configuration.DefaultTimeoutSeconds;
+            TimeSpan leasePeriod = TimeSpan.FromSeconds(Math.Max(_configuration.DeliveryLeaseSeconds, timeoutSeconds + LeaseMargin.TotalSeconds));
+            if (!await _store.TryAcquireLeaseAsync(subscription.Id, _worker, leasePeriod, cancellationToken))
+            {
+                _logger.LogInformation("Subscription {SubscriptionId}: the delivery lease was lost; another worker continues.", subscription.Id);
+                return null;
             }
 
             string payload = _notificationFactory.Serialize(_notificationFactory.CreateNotification(request), subscription.Info.ContentType);
@@ -458,11 +504,11 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
             return result;
         }
 
-        private async Task DeactivateAsync(string subscriptionId, SubscriptionState state, CancellationToken cancellationToken)
+        private async Task DeactivateAsync(string subscriptionId, SubscriptionState state, CancellationToken cancellationToken, bool revokeGrant = false)
         {
-            if (state?.ActivationTransactionId != null)
+            if (state?.ActivationTransactionId != null || (revokeGrant && state?.Grant != null))
             {
-                await _store.DeactivateAsync(subscriptionId, cancellationToken);
+                await _store.DeactivateAsync(subscriptionId, revokeGrant, cancellationToken);
             }
         }
 

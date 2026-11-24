@@ -3,6 +3,7 @@
 // Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
 // -------------------------------------------------------------------------------------------------
 
+using System;
 using System.Collections.Generic;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching;
@@ -77,7 +78,7 @@ namespace Microsoft.Health.Fhir.Tests.Common
 #endif
         }
 
-        public static string Subscription(string topicUrl, string endpoint, string content = "id-only", string filter = null, string status = "requested", string id = null, int heartbeat = 120)
+        public static string Subscription(string topicUrl, string endpoint, string content = "id-only", string filter = null, string status = "requested", string id = null, int heartbeat = 120, DateTimeOffset? end = null)
         {
 #if R5
             var subscription = new JObject
@@ -145,6 +146,9 @@ namespace Microsoft.Health.Fhir.Tests.Common
             {
                 subscription["id"] = id;
             }
+
+            // API writes always store an end within the server's maximum lifetime.
+            subscription["end"] = (end ?? DateTimeOffset.UtcNow.AddDays(7)).ToString("o", System.Globalization.CultureInfo.InvariantCulture);
 
             return subscription.ToString();
         }

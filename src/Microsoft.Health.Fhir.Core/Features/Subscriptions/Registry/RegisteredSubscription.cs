@@ -43,11 +43,12 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry
         public bool HasValidGrant => Grant != null;
 
         /// <summary>
-        /// Gets a value indicating whether resource changes should be matched for this subscription: it is valid,
-        /// authorized, activated, and either active or in error (events are retained while in error).
+        /// Gets a value indicating whether resource changes should be matched for this subscription: it is valid, authorized and
+        /// activated, and not stopped. Activation, not the stored status, decides: a handshake activates the subscription before the
+        /// server writes <c>active</c>, and a cached copy may still say <c>requested</c>. Events are retained while in error.
         /// </summary>
         public bool IsMatchable =>
             IsValid && HasValidGrant && Topic != null && State?.ActivationTransactionId != null &&
-            (Info.Status == SubscriptionStatusCode.Active || Info.Status == SubscriptionStatusCode.Error);
+            Info.Status is SubscriptionStatusCode.Requested or SubscriptionStatusCode.Active or SubscriptionStatusCode.Error;
     }
 }

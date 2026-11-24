@@ -220,6 +220,21 @@ SELECT R.ResourceTypeId
         }
 
         /// <summary>
+        /// Returns when a <c>ResourceChangeData</c> record was written, or null when it no longer exists.
+        /// </summary>
+        /// <param name="id">The change record id.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The timestamp.</returns>
+        internal async Task<DateTimeOffset?> GetResourceChangeDataTimestampAsync(long id, CancellationToken cancellationToken)
+        {
+            // Seeks the Id clustered index in each timestamp partition; used once when the event source changes.
+            await using var cmd = new SqlCommand("SELECT TOP 1 Timestamp FROM dbo.ResourceChangeData WHERE Id = @Id");
+            cmd.Parameters.AddWithValue("@Id", id);
+            object value = await cmd.ExecuteScalarAsync(_sqlRetryService, _logger, cancellationToken);
+            return value == null || value == DBNull.Value ? null : new DateTimeOffset(DateTime.SpecifyKind((DateTime)value, DateTimeKind.Utc));
+        }
+
+        /// <summary>
         /// Returns the highest <c>ResourceChangeData</c> id recorded before <paramref name="before"/>, or the highest id overall when
         /// <paramref name="before"/> is null; zero when there is none.
         /// </summary>

@@ -15,6 +15,7 @@ using Microsoft.Health.Fhir.Core.Configs;
 using Microsoft.Health.Fhir.Core.Features.Conformance;
 using Microsoft.Health.Fhir.Core.Features.Conformance.Models;
 using Microsoft.Health.Fhir.Core.Features.Operations;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry;
 using Microsoft.Health.Fhir.Core.Models;
 using Newtonsoft.Json.Linq;
@@ -32,6 +33,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         private readonly ISubscriptionModelConverter _converter;
         private readonly IModelInfoProvider _modelInfoProvider;
         private readonly SubscriptionRegistry _registry;
+        private readonly ISubscriptionStore _store;
         private readonly ILogger<SubscriptionsCapabilityProvider> _logger;
 
         public SubscriptionsCapabilityProvider(
@@ -39,16 +41,19 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             ISubscriptionModelConverter converter,
             IModelInfoProvider modelInfoProvider,
             SubscriptionRegistry registry,
+            ISubscriptionStore store,
             ILogger<SubscriptionsCapabilityProvider> logger)
         {
             _configuration = EnsureArg.IsNotNull(configuration?.Value, nameof(configuration));
             _converter = EnsureArg.IsNotNull(converter, nameof(converter));
             _modelInfoProvider = EnsureArg.IsNotNull(modelInfoProvider, nameof(modelInfoProvider));
             _registry = EnsureArg.IsNotNull(registry, nameof(registry));
+            _store = EnsureArg.IsNotNull(store, nameof(store));
             _logger = EnsureArg.IsNotNull(logger, nameof(logger));
         }
 
-        private bool IsEnabled => _configuration.Enabled && _converter.IsSupported;
+        // Not advertised until the store is usable, for example after the database schema upgrade; the statement is rebuilt periodically.
+        private bool IsEnabled => _configuration.Enabled && _converter.IsSupported && _store.Availability == SubscriptionStoreAvailability.Available;
 
         public async Task BuildAsync(ICapabilityStatementBuilder builder, CancellationToken cancellationToken)
         {

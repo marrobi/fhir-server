@@ -2,7 +2,7 @@
 
 The FHIR server can notify clients over HTTPS when resources change, using the [R5 topic-based subscriptions framework](https://hl7.org/fhir/R5/subscriptions.html). On R4 and R4B it follows the [Subscriptions R5 Backport IG](https://hl7.org/fhir/uv/subscriptions-backport/). The design and its trade-offs are in [ADR-2611](arch/adr-2611-fhir-subscriptions.md).
 
-The feature is **off by default** and needs the **SQL Server** data store. When it is off, `Subscription` and topic resources are stored like any other resource and nothing is sent.
+The feature is **off by default** and needs the **SQL Server** data store with schema version 123 or later. When it is off, `Subscription` and topic resources are stored like any other resource and nothing is sent. When it is on but the store cannot be used, `Subscription` writes and `$status` fail (501 on other data stores; 503 while the database schema is still being upgraded) and nothing is advertised in the CapabilityStatement.
 
 ## What is supported
 
@@ -15,7 +15,7 @@ The feature is **off by default** and needs the **SQL Server** data store. When 
 | Subscriptions | Topic-based only (`criteria` is the topic canonical on R4) | Classic R4 criteria-based subscriptions (rejected with 400) |
 | Channels | `rest-hook` | `websocket`, `email`, `message` |
 | Payload | `empty`, `id-only` (default), `full-resource`; `application/fhir+json` or `application/fhir+xml` | |
-| Notifications | `handshake`, `heartbeat`, `event-notification`; R5 `subscription-notification` bundles, Backport `history` bundles | `query-status`, `query-event`, `$events` |
+| Notifications | `handshake`, `heartbeat`, `event-notification`; R5 `subscription-notification` bundles, Backport `history` bundles; `query-status` through `$status` | `query-event`, `$events` |
 | Operations | `$status` on `Subscription/{id}/$status` and `Subscription/$status?id=` | `$events`, `$get-ws-binding-token` |
 
 ## How it works
@@ -25,7 +25,9 @@ The feature is **off by default** and needs the **SQL Server** data store. When 
 3. The server sends a **handshake**. A 2xx response makes the subscription `active`; anything else moves it to `error`.
 4. A background **pump** reads committed transactions, matches each written version against the active subscriptions in memory, and queues events per subscription. Matching never adds work to the write path.
 5. A delivery service sends queued events in order, up to `maxCount` per notification, retries with back-off, and moves the subscription to `error` after `MaxDeliveryAttempts`. Undelivered events are kept; set `status` back to `requested` to retry.
-6. Changing the endpoint, channel, topic, filters or content of a subscription needs a new grant and a new handshake.
+6. Changing the endpoint, channel, topic, filters or content of a subscription needs a new grant and a new handshake. Events still pending from before the change are not sent: they were matched and authorized for the previous content.
+7. Setting `status` to `off` or `entered-in-error`, or reaching `end`, removes the grant and retires pending events, so writing the subscription back without the API (for example with `$import`) cannot reactivate it. The registry also re-checks that every stored subscription has an `end` within `MaxLifetimeDays`.
+8. Each subscription is handled by one worker at a time. The worker renews its lease before every notification, for longer than that notification's timeout.
 
 `$status` reports `status`, `eventsSinceSubscriptionStart` and, on failure, the error.
 
@@ -51,7 +53,7 @@ The pump reads committed changes through an event source, selected by `EventSour
 | `Transactions` (default) | `dbo.Transactions` up to the visibility watermark, then every version each transaction wrote | Covers every write path, including `$import` and bulk operations. Notifications wait for the oldest incomplete transaction. |
 | `ResourceChangeData` | The `ResourceChangeData` change feed | Needs `CoreFeatures:SupportsResourceChangeCapture`; without it the pump logs an error and does not run. Covers only what the change feed records (it omits versions written as history). Its reader takes a table lock that can block concurrent writes. The feed itself is only read, never changed. |
 
-Each source keeps its own cursor. Switching sources is safe: the new source starts no later than the earliest activation, and changes it reads again are not numbered twice.
+Each source keeps its own cursor, and the pump records which source it last used. When the source changes, the new one starts an hour before the last change the previous source processed, rather than resuming an old cursor. Changes it reads again are already in the outbox, which keeps events for at least a day, so they are not numbered twice. A transaction that runs for longer than an hour across a switch may be missed.
 
 ## Configuration
 
@@ -77,7 +79,7 @@ Settings are under `FhirServer:Subscriptions`.
 | `NotifyHistoricalVersions` | `false` | Whether versions written directly as history, such as `$import` loading earlier versions, notify. |
 | `UnversionedResourceTypes` | `AllowWithGaps` | `AllowWithGaps` or `RequireHistory` for topics on `no-version` resource types. See [History requirement](#history-requirement). |
 | `RegistryRefreshIntervalSeconds` | `10` | How often each instance reloads subscriptions and topics. |
-| `DeliveryPollingIntervalSeconds` / `DeliveryLeaseSeconds` | `1` / `60` | Delivery polling and the per-subscription lease that keeps delivery ordered across instances. |
+| `DeliveryPollingIntervalSeconds` / `DeliveryLeaseSeconds` | `1` / `60` | Delivery polling, and the per-subscription lease that keeps delivery ordered across instances. Before each send the lease is renewed for at least the send's timeout plus 30 seconds. |
 
 Endpoints must be absolute `https://` URLs with no user information. Every resolved address is checked again when connecting, so DNS changes cannot redirect notifications to a blocked address. Headers that control the HTTP connection (`Host`, `Content-Type`, `Content-Length`, `Connection` and similar) cannot be set on a subscription.
 

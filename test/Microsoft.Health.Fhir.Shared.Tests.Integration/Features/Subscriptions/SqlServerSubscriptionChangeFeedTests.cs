@@ -3,6 +3,7 @@
 // Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
 // -------------------------------------------------------------------------------------------------
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -12,6 +13,8 @@ using Microsoft.Health.Fhir.Core.Features.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence;
 using Microsoft.Health.Fhir.Core.Messages.Delete;
+using Microsoft.Health.Fhir.SqlServer.Features.Storage;
+using Microsoft.Health.Fhir.SqlServer.Features.Subscriptions;
 using Microsoft.Health.Fhir.SqlServer.Features.Watchdogs;
 using Microsoft.Health.Fhir.Tests.Common;
 using Microsoft.Health.Test.Utilities;
@@ -73,6 +76,31 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
             // Assert
             SubscriptionEventRecord e = Assert.Single(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None), r => r.ResourceId == id);
             Assert.Equal(SubscriptionEventStatus.Pending, e.Status);
+        }
+
+        [Fact]
+        public async Task GivenAStaleCursorFromAnEarlierUse_WhenTheSourceIsSwitchedBack_ThenItStartsAtTheHandOverInsteadOfResuming()
+        {
+            // Arrange: the change feed source is in use, and the Transactions cursor is left over from three days ago.
+            SubscriptionEventWatchdog changeFeedPump = CreatePump("true");
+            await changeFeedPump.PumpAsync(CancellationToken.None);
+            await ActivateSubscriptionAsync("s1");
+            string id = await CreateObservationAsync("preliminary");
+            await changeFeedPump.PumpAsync(CancellationToken.None);
+            long stale = DateTimeOffset.UtcNow.AddDays(-3).ToSurrogateId();
+            ExecuteSql($"INSERT INTO dbo.Parameters (Id, Bigint) VALUES ('{SqlServerSubscriptionStore.CursorId}', {stale})");
+
+            // Act
+            Configuration.EventSource = SubscriptionEventSource.Transactions;
+            SubscriptionEventWatchdog transactionsPump = CreatePump("true");
+            await AdvanceVisibilityAsync();
+            await transactionsPump.PumpAsync(CancellationToken.None); // hands over
+            long start = (await Store.GetCursorAsync(CancellationToken.None)).Value;
+            await transactionsPump.PumpAsync(CancellationToken.None);
+
+            // Assert: started an hour before the change feed's last change, not three days back; the re-read change is not numbered again.
+            Assert.True(start >= DateTimeOffset.UtcNow.AddHours(-2).ToSurrogateId(), $"Started at {start.ToLastUpdated():o}.");
+            Assert.Single(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None), r => r.ResourceId == id);
         }
 
         [Fact]

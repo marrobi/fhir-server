@@ -244,7 +244,7 @@ flowchart TB
 
 ### Event source options
 
-Two existing sources can feed the matcher. Both are read-only uses of existing data, and both sit behind `ITransactionEventSource`, so the matcher and delivery are the same either way. They are not interchangeable underneath: the cursor, deduplication key and activation watermark in the design decisions below are written for `Transactions`, and would be redefined for the change feed.
+Two existing sources can feed the matcher. Both are read-only uses of existing data, and both sit behind `ITransactionEventSource`, so the matcher and delivery are the same either way. Underneath, the deduplication key and activation watermark in the design decisions below are written for `Transactions`; the change-feed source maps each record back to the transaction that wrote it so the same key and watermark apply, and a source switch hands over by time (section 12).
 
 | | `Transactions` (preferred) | `ResourceChangeData` change feed (alternative) |
 |---|---|---|
@@ -399,6 +399,11 @@ The implementation is on the `feature/fhir-subscriptions` branch. Where it settl
 - **Unversioned types.** `UnversionedResourceTypes` is `AllowWithGaps` (default: unevaluable gaps, as above) or `RequireHistory` (topics on `no-version` types are rejected, including base-type triggers while any type is `no-version`).
 - **R4 topic profile.** The `Basic` topic StructureDefinition ships in the R4 server, is listed in `Basic.supportedProfile`, and is resolved by `$validate` without being uploaded.
 - **Metrics.** Pump progress and lag, events by outcome, notification attempts and duration by type and outcome, and server status changes, on the `FhirServer` meter.
+- **Activation race.** Each activation increments a counter in `dbo.Parameters`. The pump reads it before the states it matches with, and the enqueue refuses the page under lock if it changed, so a page matched without a just-activated subscription is matched again instead of committed. An activated subscription is matchable even if its stored status still says `requested`.
+- **Grant lifecycle.** A content change retires pending events, so they are never sent to a new endpoint or under new filters. `off`, `entered-in-error` and reaching `end` revoke the grant, and the registry rejects stored subscriptions whose `end` is missing or beyond `MaxLifetimeDays`, so writes outside the API cannot revive or extend a subscription. A missing grant is tolerated for a minute after an API write, which commits the resource just before the grant.
+- **Delivery.** The lease is renewed before every send for longer than the send's timeout; a lost lease stops the worker. The due-subscriptions query probes each activated subscription instead of reading the pending backlog. Rest-hook requests do not use a proxy, so the connect-time address check applies to the endpoint itself.
+- **Source hand-over.** The pump records the source it uses. A new or changed source starts an hour before the previous source's last position, instead of at the earliest activation or at an old cursor of its own.
+- **Availability.** The store reports whether it can be used (SQL Server at schema 123 or later). Until then subscription writes and `$status` return 503 (501 on other data stores), delivery waits, and the CapabilityStatement does not advertise subscriptions.
 - **Pump start.** On its first run the pump starts its cursor at the visibility watermark, or at the earliest existing activation watermark if that is lower, so a subscription activated before the pump first runs receives every later change.
 - **History.** Instead of gating `InvisibleHistoryCleanupWatchdog` on the cursor, the implementation keeps invisible history for at least `MaxHistoryCleanupHoldHours` while the feature is on. Versions removed earlier are recorded as `Unevaluable`. Tests confirm that `no-version` types lose earlier versions as described in decision 3.
 - **Limits.** Defaults are a 365-day maximum lifetime, 1,000 subscriptions in `requested`, `active` or `error`, 5 delivery attempts and a 60-second minimum heartbeat. All are configurable; see [Subscriptions](../../Subscriptions.md).

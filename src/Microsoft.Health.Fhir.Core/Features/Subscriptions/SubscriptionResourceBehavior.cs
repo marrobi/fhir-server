@@ -11,12 +11,14 @@ using System.Threading.Tasks;
 using EnsureThat;
 using Medino;
 using Microsoft.Extensions.Options;
+using Microsoft.Health.Abstractions.Exceptions;
 using Microsoft.Health.Core.Features.Context;
 using Microsoft.Health.Core.Features.Security.Authorization;
 using Microsoft.Health.Fhir.Core.Configs;
 using Microsoft.Health.Fhir.Core.Exceptions;
 using Microsoft.Health.Fhir.Core.Extensions;
 using Microsoft.Health.Fhir.Core.Features.Context;
+using Microsoft.Health.Fhir.Core.Features.Operations;
 using Microsoft.Health.Fhir.Core.Features.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Security;
 using Microsoft.Health.Fhir.Core.Features.Security.Authorization;
@@ -161,7 +163,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
 
             DeleteResourceResponse response = await next();
 
-            if (string.Equals(resourceType, KnownResourceTypes.Subscription, StringComparison.Ordinal))
+            if (string.Equals(resourceType, KnownResourceTypes.Subscription, StringComparison.Ordinal) && _store.Availability == SubscriptionStoreAvailability.Available)
             {
                 await _store.DeleteStateAsync(request.ResourceKey.Id, cancellationToken);
                 _registry.Invalidate();
@@ -188,6 +190,15 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
 
         private async Task<UpsertResourceResponse> WriteSubscriptionAsync(ResourceElement resource, ResourceElement existing, RequestHandlerDelegate<UpsertResourceResponse> next, CancellationToken cancellationToken)
         {
+            switch (_store.Availability)
+            {
+                case SubscriptionStoreAvailability.NotSupported:
+                    throw new OperationNotImplementedException(Core.Resources.SubscriptionsRequireSqlServer);
+                case SubscriptionStoreAvailability.NotReady:
+                    // For example, while the database schema is being upgraded; retrying later succeeds.
+                    throw new ServiceUnavailableException();
+            }
+
             SubscriptionInfo info;
             try
             {
@@ -219,8 +230,9 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
 
             SubscriptionInfo existingInfo = TryConvert(existing);
             SubscriptionStatusCode status = DecideStatus(info, existingInfo, contentHash);
-            if (existingInfo == null && status == SubscriptionStatusCode.Requested)
+            if (IsLive(status) && (existingInfo == null || !IsLive(existingInfo.Status)))
             {
+                // Any transition into a live status counts, so creating as off and then requesting cannot exceed the limit.
                 await EnsureCapacityAsync(cancellationToken);
             }
 
@@ -229,11 +241,23 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             UpsertResourceResponse response = await next();
 
             string id = response.Outcome.RawResourceElement.Id;
-            await _store.SaveGrantAsync(id, contentHash, grant.Serialize(), cancellationToken);
+            if (IsLive(status))
+            {
+                await _store.SaveGrantAsync(id, contentHash, grant.Serialize(), cancellationToken);
+            }
+            else
+            {
+                // A stopped subscription keeps no grant, so writing it back (for example with $import) cannot reactivate it.
+                await _store.DeactivateAsync(id, revokeGrant: true, cancellationToken);
+            }
+
             _registry.Invalidate();
 
             return response;
         }
+
+        private static bool IsLive(SubscriptionStatusCode status) =>
+            status is SubscriptionStatusCode.Requested or SubscriptionStatusCode.Active or SubscriptionStatusCode.Error;
 
         private static SubscriptionStatusCode DecideStatus(SubscriptionInfo requested, SubscriptionInfo existing, string contentHash)
         {

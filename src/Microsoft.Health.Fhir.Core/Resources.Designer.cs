@@ -3094,5 +3094,14 @@ namespace Microsoft.Health.Fhir.Core {
                 return ResourceManager.GetString("SubscriptionTopicRequiresHistory", resourceCulture);
             }
         }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to The subscription must have an end no more than {0} days ahead. Update it through the API to set one..
+        /// </summary>
+        internal static string SubscriptionEndBeyondMaximum {
+            get {
+                return ResourceManager.GetString("SubscriptionEndBeyondMaximum", resourceCulture);
+            }
+        }
     }
 }

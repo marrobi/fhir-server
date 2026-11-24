@@ -28,7 +28,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
 #if Stu3
         public ResourceElement CreateNotification(SubscriptionNotificationRequest request) => throw new NotSupportedException();
 
-        public ResourceElement CreateStatusBundle(IReadOnlyList<SubscriptionNotificationRequest> statuses) => throw new NotSupportedException();
+        public ResourceElement CreateStatusBundle(IReadOnlyList<SubscriptionNotificationRequest> statuses, Uri selfUrl = null) => throw new NotSupportedException();
 
         public string Serialize(ResourceElement resource, string contentType) => throw new NotSupportedException();
 #else
@@ -106,7 +106,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             return bundle.ToResourceElement();
         }
 
-        public ResourceElement CreateStatusBundle(IReadOnlyList<SubscriptionNotificationRequest> statuses)
+        public ResourceElement CreateStatusBundle(IReadOnlyList<SubscriptionNotificationRequest> statuses, Uri selfUrl = null)
         {
             EnsureArg.IsNotNull(statuses, nameof(statuses));
 
@@ -117,6 +117,12 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
                 Timestamp = Clock.UtcNow,
                 Total = statuses.Count,
             };
+
+            if (selfUrl != null)
+            {
+                // A searchset needs a self link (R5 bdl-18).
+                bundle.Link.Add(new Bundle.LinkComponent { Relation = "self", Url = selfUrl.AbsoluteUri });
+            }
 
             foreach (SubscriptionNotificationRequest status in statuses)
             {

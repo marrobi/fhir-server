@@ -70,6 +70,16 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
             return await _reader.Store.GetResourceChangeDataIdBeforeAsync(before, cancellationToken);
         }
 
+        public Task<DateTimeOffset?> GetPositionTimeAsync(long position, CancellationToken cancellationToken)
+        {
+            return _reader.Store.GetResourceChangeDataTimestampAsync(position, cancellationToken);
+        }
+
+        public Task<long> GetPositionBeforeAsync(DateTimeOffset time, CancellationToken cancellationToken)
+        {
+            return _reader.Store.GetResourceChangeDataIdBeforeAsync(time.UtcDateTime, cancellationToken);
+        }
+
         public async Task<TransactionEventPage> ReadAsync(long position, int maxPositions, Func<string, bool> isCovered, CancellationToken cancellationToken)
         {
             short pageSize = (short)Math.Clamp(maxPositions, 1, short.MaxValue);
@@ -101,14 +111,15 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
                     }
                     else
                     {
-                        // The version is gone, for example overwritten on a no-version type. Keep it so it is recorded as unevaluable,
-                        // identified by the time it was recorded.
+                        // The version is gone, for example overwritten on a no-version type. Keep it so it is recorded as unevaluable.
+                        // The time it was recorded stands in for its transaction. Every record of one write shares that time, so the
+                        // change record id, which is unique, keeps the outbox key of each record distinct.
                         long recordedAt = new DateTimeOffset(record.Timestamp, TimeSpan.Zero).ToSurrogateId();
                         changes.Add(new ResourceChange
                         {
                             TransactionId = recordedAt,
                             ResourceTypeId = record.ResourceTypeId,
-                            ResourceSurrogateId = recordedAt,
+                            ResourceSurrogateId = record.Id,
                             ResourceType = record.ResourceTypeName,
                             ResourceId = record.ResourceId,
                             Version = record.ResourceVersion,

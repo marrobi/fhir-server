@@ -4,7 +4,10 @@ GO
 -- Event numbers continue each subscription's counter. Events for subscriptions that are not activated, or for transactions
 -- at or before the activation watermark, are dropped. Replays are idempotent: existing events are not inserted again,
 -- so they cannot consume extra event numbers, and the cursor never moves backwards.
-CREATE PROCEDURE dbo.EnqueueSubscriptionEvents @Events dbo.SubscriptionEventList READONLY, @CursorId varchar(100), @CursorTransactionId bigint
+-- @ActivationVersion is the activation counter the caller read before the subscription states it matched with. If a
+-- subscription was activated since, the events may be missing it, so nothing is written and @IsStale is set: the caller
+-- must match the same changes again with fresh states.
+CREATE PROCEDURE dbo.EnqueueSubscriptionEvents @Events dbo.SubscriptionEventList READONLY, @CursorId varchar(100), @CursorTransactionId bigint, @ActivationVersion bigint = NULL, @IsStale bit = 0 OUT
 AS
 set nocount on
 set xact_abort on
@@ -30,7 +33,19 @@ BEGIN TRY
     )
   DECLARE @Base TABLE (SubscriptionId varchar(64) COLLATE Latin1_General_100_CS_AS NOT NULL PRIMARY KEY, BaseNumber bigint NOT NULL)
 
+  SET @IsStale = 0
+
   BEGIN TRANSACTION
+
+  -- The update lock serializes with ActivateSubscription, so no activation can commit between this check and the commit.
+  IF @ActivationVersion IS NOT NULL
+     AND isnull((SELECT Bigint FROM dbo.Parameters WITH (UPDLOCK, HOLDLOCK) WHERE Id = 'Subscriptions.ActivationVersion'), 0) <> @ActivationVersion
+  BEGIN
+    SET @IsStale = 1
+    COMMIT TRANSACTION
+    EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Text='Stale activations'
+    RETURN
+  END
 
   -- Locking the state rows serializes concurrent enqueues for a subscription.
   INSERT INTO @New

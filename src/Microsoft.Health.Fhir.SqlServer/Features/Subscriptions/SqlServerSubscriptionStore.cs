@@ -15,8 +15,10 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence;
+using Microsoft.Health.Fhir.SqlServer.Features.Schema;
 using Microsoft.Health.Fhir.SqlServer.Features.Schema.Model;
 using Microsoft.Health.Fhir.SqlServer.Features.Storage;
+using Microsoft.Health.SqlServer.Features.Schema;
 
 namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
 {
@@ -30,16 +32,35 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
         /// </summary>
         public const string CursorId = "SubscriptionEventWatchdog.Cursor";
 
+        /// <summary>
+        /// The <c>dbo.Parameters</c> id recording which event source the pump last used.
+        /// </summary>
+        public const string EventSourceId = "SubscriptionEventWatchdog.Source";
+
+        /// <summary>
+        /// The <c>dbo.Parameters</c> id of the counter that every activation increments.
+        /// </summary>
+        public const string ActivationVersionId = "Subscriptions.ActivationVersion";
+
         private readonly ISqlRetryService _sqlRetryService;
         private readonly ISqlServerFhirModel _model;
+        private readonly SchemaInformation _schemaInformation;
         private readonly ILogger<SqlServerSubscriptionStore> _logger;
 
-        public SqlServerSubscriptionStore(ISqlRetryService sqlRetryService, ISqlServerFhirModel model, ILogger<SqlServerSubscriptionStore> logger)
+        public SqlServerSubscriptionStore(ISqlRetryService sqlRetryService, ISqlServerFhirModel model, SchemaInformation schemaInformation, ILogger<SqlServerSubscriptionStore> logger)
         {
             _sqlRetryService = EnsureArg.IsNotNull(sqlRetryService, nameof(sqlRetryService));
             _model = EnsureArg.IsNotNull(model, nameof(model));
+            _schemaInformation = EnsureArg.IsNotNull(schemaInformation, nameof(schemaInformation));
             _logger = EnsureArg.IsNotNull(logger, nameof(logger));
         }
+
+        /// <summary>
+        /// Gets whether the database schema has the subscription tables and procedures. During a rolling upgrade the server can
+        /// run before the schema reaches <see cref="SchemaVersionConstants.Subscriptions"/>.
+        /// </summary>
+        public SubscriptionStoreAvailability Availability =>
+            _schemaInformation.Current >= SchemaVersionConstants.Subscriptions ? SubscriptionStoreAvailability.Available : SubscriptionStoreAvailability.NotReady;
 
         public async Task<IReadOnlyList<SubscriptionState>> GetStatesAsync(CancellationToken cancellationToken)
         {
@@ -81,10 +102,11 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
             return (long)output.Value;
         }
 
-        public async Task DeactivateAsync(string subscriptionId, CancellationToken cancellationToken)
+        public async Task DeactivateAsync(string subscriptionId, bool revokeGrant, CancellationToken cancellationToken)
         {
             await using SqlCommand cmd = Procedure("dbo.DeactivateSubscription");
             cmd.Parameters.AddWithValue("@SubscriptionId", subscriptionId);
+            cmd.Parameters.AddWithValue("@RevokeGrant", revokeGrant);
             await cmd.ExecuteNonQueryAsync(_sqlRetryService, _logger, cancellationToken);
         }
 
@@ -193,9 +215,9 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
         /// <param name="cursorTransactionId">The last transaction covered by <paramref name="events"/>.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns>A task.</returns>
-        public Task EnqueueAsync(IReadOnlyList<SubscriptionEventCandidate> events, long cursorTransactionId, CancellationToken cancellationToken)
+        public async Task EnqueueAsync(IReadOnlyList<SubscriptionEventCandidate> events, long cursorTransactionId, CancellationToken cancellationToken)
         {
-            return EnqueueAsync(events, CursorId, cursorTransactionId, cancellationToken);
+            await EnqueueAsync(events, CursorId, cursorTransactionId, activationVersion: null, cancellationToken);
         }
 
         /// <summary>
@@ -204,9 +226,12 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
         /// <param name="events">The events in change order.</param>
         /// <param name="cursorId">The cursor of the event source the events came from.</param>
         /// <param name="cursorPosition">The last source position covered by <paramref name="events"/>.</param>
+        /// <param name="activationVersion">
+        /// The activation counter read before the subscription states the events were matched with, or null to skip the check.
+        /// </param>
         /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>A task.</returns>
-        public async Task EnqueueAsync(IReadOnlyList<SubscriptionEventCandidate> events, string cursorId, long cursorPosition, CancellationToken cancellationToken)
+        /// <returns>False, with nothing written, when a subscription was activated after <paramref name="activationVersion"/> was read.</returns>
+        public async Task<bool> EnqueueAsync(IReadOnlyList<SubscriptionEventCandidate> events, string cursorId, long cursorPosition, long? activationVersion, CancellationToken cancellationToken)
         {
             EnsureArg.IsNotNullOrWhiteSpace(cursorId, nameof(cursorId));
             EnsureArg.IsNotNull(events, nameof(events));
@@ -236,6 +261,71 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
             new SubscriptionEventListTableValuedParameterDefinition("@Events").AddParameter(cmd.Parameters, rows);
             cmd.Parameters.AddWithValue("@CursorId", cursorId);
             cmd.Parameters.AddWithValue("@CursorTransactionId", cursorPosition);
+            cmd.Parameters.Add(new SqlParameter("@ActivationVersion", SqlDbType.BigInt) { Value = activationVersion.HasValue ? activationVersion.Value : DBNull.Value });
+            SqlParameter stale = cmd.Parameters.Add("@IsStale", SqlDbType.Bit);
+            stale.Direction = ParameterDirection.Output;
+            await cmd.ExecuteNonQueryAsync(_sqlRetryService, _logger, cancellationToken);
+            return !(stale.Value is bool isStale && isStale);
+        }
+
+        /// <summary>
+        /// Reads the activation counter. Read it before the subscription states used for matching, and pass it to
+        /// <see cref="EnqueueAsync(IReadOnlyList{SubscriptionEventCandidate}, string, long, long?, CancellationToken)"/>.
+        /// </summary>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The counter; zero before the first activation.</returns>
+        public async Task<long> GetActivationVersionAsync(CancellationToken cancellationToken)
+        {
+            await using var cmd = new SqlCommand("SELECT isnull((SELECT Bigint FROM dbo.Parameters WHERE Id = @Id), 0)");
+            cmd.Parameters.AddWithValue("@Id", ActivationVersionId);
+            object value = await cmd.ExecuteScalarAsync(_sqlRetryService, _logger, cancellationToken);
+            return value == null || value == DBNull.Value ? 0 : (long)value;
+        }
+
+        /// <summary>
+        /// Reads which event source the pump last used, or null if it has not recorded one.
+        /// </summary>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The source name.</returns>
+        public async Task<string> GetEventSourceAsync(CancellationToken cancellationToken)
+        {
+            await using var cmd = new SqlCommand("SELECT Char FROM dbo.Parameters WHERE Id = @Id");
+            cmd.Parameters.AddWithValue("@Id", EventSourceId);
+            object value = await cmd.ExecuteScalarAsync(_sqlRetryService, _logger, cancellationToken);
+            return value == null || value == DBNull.Value ? null : (string)value;
+        }
+
+        /// <summary>
+        /// Records the event source the pump uses and, when <paramref name="position"/> is set, sets that source's cursor to it,
+        /// even if that moves the cursor backwards. Used when the pump starts or changes source.
+        /// </summary>
+        /// <param name="source">The source name.</param>
+        /// <param name="cursorId">The source's cursor id.</param>
+        /// <param name="position">The position to start after, or null to keep the cursor.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>A task.</returns>
+        public async Task SetEventSourceAsync(string source, string cursorId, long? position, CancellationToken cancellationToken)
+        {
+            EnsureArg.IsNotNullOrWhiteSpace(source, nameof(source));
+            EnsureArg.IsNotNullOrWhiteSpace(cursorId, nameof(cursorId));
+
+            await using var cmd = new SqlCommand(@"
+set xact_abort on
+BEGIN TRANSACTION
+IF @Position IS NOT NULL
+BEGIN
+  UPDATE dbo.Parameters SET Bigint = @Position, UpdatedDate = getUTCdate() WHERE Id = @CursorId
+  IF @@rowcount = 0
+    INSERT INTO dbo.Parameters (Id, Bigint, UpdatedDate) VALUES (@CursorId, @Position, getUTCdate())
+END
+UPDATE dbo.Parameters SET Char = @Source, UpdatedDate = getUTCdate() WHERE Id = @SourceId
+IF @@rowcount = 0
+  INSERT INTO dbo.Parameters (Id, Char, UpdatedDate) VALUES (@SourceId, @Source, getUTCdate())
+COMMIT TRANSACTION");
+            cmd.Parameters.AddWithValue("@CursorId", cursorId);
+            cmd.Parameters.Add(new SqlParameter("@Position", SqlDbType.BigInt) { Value = position.HasValue ? position.Value : DBNull.Value });
+            cmd.Parameters.AddWithValue("@SourceId", EventSourceId);
+            cmd.Parameters.Add(new SqlParameter("@Source", SqlDbType.VarChar, 4000) { Value = source });
             await cmd.ExecuteNonQueryAsync(_sqlRetryService, _logger, cancellationToken);
         }
 

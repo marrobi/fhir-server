@@ -41,6 +41,9 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
         private static readonly TimeSpan CleanupInterval = TimeSpan.FromHours(1);
         private static readonly TimeSpan MaxRunTime = TimeSpan.FromSeconds(30);
 
+        // Longer than any expected transaction, so a change committed late by a long transaction is not skipped on hand-over.
+        private static readonly TimeSpan HandoverMargin = TimeSpan.FromHours(1);
+
         private readonly IReadOnlyList<ITransactionEventSource> _sources;
         private readonly SqlServerSubscriptionStore _subscriptionStore;
         private readonly SubscriptionRegistry _registry;
@@ -114,15 +117,9 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
                 return 0;
             }
 
-            long? cursor = await _subscriptionStore.GetCursorAsync(source.CursorId, cancellationToken);
+            long? cursor = await StartSourceAsync(source, cancellationToken);
             if (cursor == null)
             {
-                // First run for this source: start from now, but never past an existing activation, whose subscription is owed every later change.
-                IReadOnlyList<SubscriptionState> states = await _subscriptionStore.GetStatesAsync(cancellationToken);
-                long? earliestActivation = states.Where(s => s.ActivationTransactionId != null).Select(s => s.ActivationTransactionId).Min();
-                long start = await source.GetStartPositionAsync(earliestActivation, cancellationToken);
-                await _subscriptionStore.EnqueueAsync([], source.CursorId, start, cancellationToken);
-                _logger.LogInformation("Subscription event pump initialized the {Source} source at position {Position}.", source.Kind, start);
                 return 0;
             }
 
@@ -132,6 +129,9 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
             int processed = 0;
             while (stopwatch.Elapsed < MaxRunTime && !cancellationToken.IsCancellationRequested)
             {
+                // Read the activation counter before the states: if a subscription is activated while this page is matched,
+                // the enqueue reports it and the page is matched again, so no change after an activation is missed.
+                long activationVersion = await _subscriptionStore.GetActivationVersionAsync(cancellationToken);
                 IReadOnlyList<SubscriptionState> states = await _subscriptionStore.GetStatesAsync(cancellationToken);
                 SubscriptionRegistrySnapshot snapshot = await _registry.EnsureIncludesAsync(states, cancellationToken);
                 List<RegisteredSubscription> matchable = snapshot.Subscriptions.Where(s => s.IsMatchable).ToList();
@@ -144,7 +144,12 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
                 }
 
                 IReadOnlyList<SubscriptionEventCandidate> events = _processor.Process(page.Changes, matchable);
-                await _subscriptionStore.EnqueueAsync(events, source.CursorId, page.LastPosition, cancellationToken);
+                if (!await _subscriptionStore.EnqueueAsync(events, source.CursorId, page.LastPosition, activationVersion, cancellationToken))
+                {
+                    _logger.LogInformation("Subscription event pump is matching changes after {Position} again because a subscription was activated.", cursor);
+                    continue;
+                }
+
                 cursor = page.LastPosition;
                 processed += page.PositionCount;
 
@@ -158,6 +163,59 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
             }
 
             return processed;
+        }
+
+        /// <summary>
+        /// Returns the source's cursor, positioning it first when the pump has not used this source before or last used another one.
+        /// </summary>
+        /// <param name="source">The configured source.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The cursor, or null when it was just positioned and reading starts on the next run.</returns>
+        private async Task<long?> StartSourceAsync(ITransactionEventSource source, CancellationToken cancellationToken)
+        {
+            string recorded = await _subscriptionStore.GetEventSourceAsync(cancellationToken);
+            long? cursor = await _subscriptionStore.GetCursorAsync(source.CursorId, cancellationToken);
+            string current = source.Kind.ToString();
+            if (string.Equals(recorded, current, StringComparison.Ordinal) && cursor != null)
+            {
+                return cursor;
+            }
+
+            ITransactionEventSource previous = recorded == null || string.Equals(recorded, current, StringComparison.Ordinal)
+                ? null
+                : _sources.FirstOrDefault(s => string.Equals(s.Kind.ToString(), recorded, StringComparison.Ordinal));
+
+            if (recorded == null && cursor != null)
+            {
+                // Recorded before the source was tracked: keep the cursor.
+                await _subscriptionStore.SetEventSourceAsync(current, source.CursorId, null, cancellationToken);
+                return cursor;
+            }
+
+            long start;
+            DateTimeOffset? handoverTime = null;
+            if (previous != null && await _subscriptionStore.GetCursorAsync(previous.CursorId, cancellationToken) is long previousCursor)
+            {
+                handoverTime = await previous.GetPositionTimeAsync(previousCursor, cancellationToken);
+            }
+
+            if (handoverTime.HasValue)
+            {
+                // The previous source processed every change up to its cursor. Start a margin earlier, so changes recorded late are
+                // not skipped; changes read again are already in the outbox, which is kept longer than the margin, so they are not numbered twice.
+                start = await source.GetPositionBeforeAsync(handoverTime.Value - HandoverMargin, cancellationToken);
+            }
+            else
+            {
+                // First run: start from now, but never past an existing activation, whose subscription is owed every later change.
+                IReadOnlyList<SubscriptionState> states = await _subscriptionStore.GetStatesAsync(cancellationToken);
+                long? earliestActivation = states.Where(s => s.ActivationTransactionId != null).Select(s => s.ActivationTransactionId).Min();
+                start = await source.GetStartPositionAsync(earliestActivation, cancellationToken);
+            }
+
+            await _subscriptionStore.SetEventSourceAsync(current, source.CursorId, start, cancellationToken);
+            _logger.LogInformation("Subscription event pump started the {Source} source at position {Position} (previous source: {Previous}).", source.Kind, start, recorded ?? "none");
+            return null;
         }
 
         private ITransactionEventSource GetSource()

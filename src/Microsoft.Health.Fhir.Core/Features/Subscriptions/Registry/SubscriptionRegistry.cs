@@ -202,7 +202,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry
             }
 
             SubscriptionTopicInfo topic = ResolveTopic(topics, info.TopicCanonical);
-            IReadOnlyList<string> errors = _validator.ValidateSubscription(info, topic);
+            IReadOnlyList<string> errors = [.. _validator.ValidateSubscription(info, topic), .. _validator.ValidateLifetime(info)];
 
             SubscriptionGrant grant = null;
             if (state?.Grant != null && string.Equals(state.ContentHash, info.ComputeContentHash(), StringComparison.Ordinal))

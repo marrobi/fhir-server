@@ -39,13 +39,13 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
 
         public List<(string Id, SubscriptionStatusCode Status, string Error)> StatusWrites { get; } = [];
 
-        public void Put(ResourceElement resource)
+        public void Put(ResourceElement resource, DateTimeOffset? lastUpdated = null)
         {
             Resource poco = resource.ToPoco<Resource>();
             int version = Resources.TryGetValue((poco.TypeName, poco.Id), out ResourceElement existing) ? int.Parse(existing.VersionId, CultureInfo.InvariantCulture) + 1 : 1;
             poco.Meta ??= new Meta();
             poco.Meta.VersionId = version.ToString(CultureInfo.InvariantCulture);
-            poco.Meta.LastUpdated = Clock.UtcNow;
+            poco.Meta.LastUpdated = lastUpdated ?? Clock.UtcNow;
             ResourceElement stored = poco.ToResourceElement();
             Resources[(poco.TypeName, poco.Id)] = stored;
             Versions[(poco.TypeName, poco.Id, version)] = stored;

@@ -158,7 +158,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
                 return MatchOutcome.Match;
             }
 
-            ResourceSnapshot target = change.Interaction == SubscriptionInteraction.Delete ? change.Previous ?? change.Current : change.Current;
+            ResourceSnapshot target = change.Target;
             if (target == null)
             {
                 return MatchOutcome.Unevaluable;

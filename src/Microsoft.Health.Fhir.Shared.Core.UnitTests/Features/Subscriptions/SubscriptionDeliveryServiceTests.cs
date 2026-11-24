@@ -5,6 +5,7 @@
 
 #if !Stu3
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using Hl7.Fhir.Model;
@@ -105,7 +106,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         public async Task GivenASubscriptionWithoutAGrant_WhenProcessed_ThenItIsSetToOffWithoutAHandshake()
         {
             // Simulates $import or bulk writes, which never capture a grant.
-            _resources.Put(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "s1")));
+            _resources.Put(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "s1")), DateTimeOffset.UtcNow.AddMinutes(-2));
 
             await RunAsync();
 
@@ -117,7 +118,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         public async Task GivenAGrantForDifferentContent_WhenProcessed_ThenTheSubscriptionIsNotActivated()
         {
             await AddSubscriptionAsync("s1");
-            _resources.Put(Parse(SubscriptionResources.Subscription(TopicUrl, "https://attacker.example.com/", id: "s1")));
+            _resources.Put(Parse(SubscriptionResources.Subscription(TopicUrl, "https://attacker.example.com/", id: "s1")), DateTimeOffset.UtcNow.AddMinutes(-2));
 
             await RunAsync();
 
@@ -232,6 +233,86 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
 
             Assert.Equal(SubscriptionStatusCode.Off, Status("s1"));
             Assert.Null(_store.States["s1"].ActivationTransactionId);
+            Assert.Null(_store.States["s1"].Grant);
+        }
+
+        [Fact]
+        public async Task GivenAJustWrittenSubscriptionWhoseGrantIsNotSavedYet_WhenProcessed_ThenItIsLeftRequested()
+        {
+            // An API write commits the resource just before its grant; the subscription must not be turned off in between.
+            _resources.Put(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "s1")));
+
+            await RunAsync();
+
+            Assert.Empty(_channel.Payloads);
+            Assert.Equal(SubscriptionStatusCode.Requested, Status("s1"));
+        }
+
+        [Fact]
+        public async Task GivenASubscriptionWrittenWithoutTheApiWithAnEndBeyondTheMaximumLifetime_WhenProcessed_ThenItIsSetToError()
+        {
+            // Arrange: an existing grant, but the stored end was moved beyond the limit outside the API.
+            ResourceElement resource = Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "s1", heartbeat: 3600, end: DateTimeOffset.UtcNow.AddDays(_configuration.MaxLifetimeDays + 30)));
+            _resources.Put(resource);
+            SubscriptionInfo info = _converter.ToSubscription(_resources.Resources[("Subscription", "s1")]);
+            await _store.SaveGrantAsync("s1", info.ComputeContentHash(), new SubscriptionGrant { ContentHash = info.ComputeContentHash() }.Serialize(), CancellationToken.None);
+
+            // Act
+            await RunAsync();
+
+            // Assert
+            Assert.Empty(_channel.Payloads);
+            Assert.Equal(SubscriptionStatusCode.Error, Status("s1"));
+        }
+
+        [Fact]
+        public async Task GivenPendingEvents_WhenEachNotificationIsSent_ThenTheLeaseIsRenewedForLongerThanTheTimeout()
+        {
+            // Arrange: a lease shorter than the subscription's 30 second timeout.
+            _configuration.DeliveryLeaseSeconds = 10;
+            await ActivateAsync("s1");
+            _store.LeaseRequests.Clear();
+            for (int i = 1; i <= 3; i++)
+            {
+                _store.AddEvent("s1", "Encounter", "e" + i, 1);
+            }
+
+            // Act
+            await RunAsync();
+
+            // Assert: the first request is the lease for the pass; every send renews it for timeout plus margin.
+            Assert.NotEmpty(_channel.Payloads);
+            List<TimeSpan> renewals = _store.LeaseRequests.Skip(1).Select(r => r.Period).ToList();
+            Assert.Equal(_channel.Payloads.Count, renewals.Count);
+            Assert.All(renewals, p => Assert.True(p >= TimeSpan.FromSeconds(60), $"Lease renewed for {p}."));
+        }
+
+        [Fact]
+        public async Task GivenTheLeaseIsTakenByAnotherWorker_WhenANotificationIsAboutToBeSent_ThenItIsNotSent()
+        {
+            // Arrange
+            await ActivateAsync("s1");
+            _store.AddEvent("s1", "Encounter", "e1", 1);
+            _store.LeaseTakenOnRenewal = "other-worker";
+
+            // Act
+            await RunAsync();
+
+            // Assert
+            Assert.Empty(_channel.Payloads);
+            Assert.Equal(SubscriptionEventStatus.Pending, Assert.Single(_store.Events).Status);
+        }
+
+        [Fact]
+        public async Task GivenTheStoreIsNotReady_WhenProcessed_ThenNothingIsDoneUntilItIs()
+        {
+            await AddSubscriptionAsync("s1");
+            _store.Availability = SubscriptionStoreAvailability.NotReady;
+
+            await RunAsync();
+
+            Assert.Empty(_channel.Payloads);
+            Assert.Equal(SubscriptionStatusCode.Requested, Status("s1"));
         }
 
         [Fact]

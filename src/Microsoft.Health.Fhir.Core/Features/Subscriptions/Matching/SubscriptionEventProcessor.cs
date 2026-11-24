@@ -81,7 +81,19 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
                         continue;
                     }
 
-                    SubscriptionEventStatus? status = Evaluate(subscription, change);
+                    SubscriptionEventStatus? status;
+                    try
+                    {
+                        status = Evaluate(subscription, change);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+                    {
+                        // Topic criteria are user-supplied. A failure is confined to this subscription and change, so it cannot stop
+                        // the pump for every subscription.
+                        _logger.LogWarning(ex, "Subscription {SubscriptionId} failed to evaluate {ResourceType}/{ResourceId}/_history/{Version}.", subscription.Id, change.ResourceType, change.ResourceId, change.Version);
+                        status = SafeUnevaluable(subscription, change);
+                    }
+
                     if (status.HasValue)
                     {
                         events.Add(new SubscriptionEventCandidate(subscription.Id, change, status.Value));
@@ -99,7 +111,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
             {
                 outcome = _matcher.Match(subscription.Topic, subscription.Info.Filters, change);
             }
-            catch (Exception ex) when (ex is SubscriptionCriteriaException or InvalidOperationException or FormatException)
+            catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
             {
                 _logger.LogWarning(ex, "Subscription {SubscriptionId} could not evaluate {ResourceType}/{ResourceId}/_history/{Version}.", subscription.Id, change.ResourceType, change.ResourceId, change.Version);
                 outcome = MatchOutcome.Unevaluable;
@@ -108,7 +120,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
             switch (outcome)
             {
                 case MatchOutcome.Match:
-                    ResourceSnapshot target = change.Interaction == SubscriptionInteraction.Delete ? change.Previous ?? change.Current : change.Current;
+                    ResourceSnapshot target = change.Target;
                     if (target == null)
                     {
                         return UnevaluableIfTypeAuthorized(subscription, change);
@@ -122,6 +134,19 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
 
                 default:
                     return null;
+            }
+        }
+
+        private SubscriptionEventStatus? SafeUnevaluable(RegisteredSubscription subscription, ResourceChange change)
+        {
+            try
+            {
+                return UnevaluableIfTypeAuthorized(subscription, change);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+            {
+                _logger.LogWarning(ex, "Subscription {SubscriptionId}: change {ResourceType}/{ResourceId}/_history/{Version} is not recorded.", subscription.Id, change.ResourceType, change.ResourceId, change.Version);
+                return null;
             }
         }
 

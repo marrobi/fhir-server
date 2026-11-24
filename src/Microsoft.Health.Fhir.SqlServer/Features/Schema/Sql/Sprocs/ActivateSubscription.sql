@@ -1,7 +1,8 @@
 --DROP PROCEDURE dbo.ActivateSubscription
 GO
 -- Sets the activation watermark to the current transaction visibility if it is not already set, and makes retained
--- pending events due again. Only transactions after the watermark are matched for the subscription.
+-- pending events due again. Only transactions after the watermark are matched for the subscription. Each activation
+-- increments Subscriptions.ActivationVersion, which the event pump checks so it never commits events matched without it.
 CREATE PROCEDURE dbo.ActivateSubscription @SubscriptionId varchar(64), @ActivationTransactionId bigint = NULL OUT
 AS
 set nocount on
@@ -15,6 +16,11 @@ BEGIN TRY
   SET @Visibility = isnull((SELECT TOP 1 SurrogateIdRangeFirstValue FROM dbo.Transactions WHERE IsVisible = 1 ORDER BY SurrogateIdRangeFirstValue DESC),-1)
 
   BEGIN TRANSACTION
+
+  -- The counter is locked first, in the same order as EnqueueSubscriptionEvents (counter, state, events), to avoid deadlocks.
+  UPDATE dbo.Parameters WITH (UPDLOCK, HOLDLOCK) SET Bigint = isnull(Bigint, 0) + 1, UpdatedDate = getUTCdate() WHERE Id = 'Subscriptions.ActivationVersion'
+  IF @@rowcount = 0
+    INSERT INTO dbo.Parameters (Id, Bigint, UpdatedDate) SELECT 'Subscriptions.ActivationVersion', 1, getUTCdate()
 
   UPDATE dbo.SubscriptionStates
     SET ActivationTransactionId = isnull(ActivationTransactionId, @Visibility)

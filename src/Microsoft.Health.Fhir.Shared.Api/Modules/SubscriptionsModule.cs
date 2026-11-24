@@ -65,38 +65,7 @@ namespace Microsoft.Health.Fhir.Api.Modules
             services.TryAddSingleton<ISubscriptionStore, UnsupportedSubscriptionStore>();
 
             services.AddHttpClient(RestHookSubscriptionChannel.HttpClientName)
-                .ConfigurePrimaryHttpMessageHandler(provider =>
-                {
-                    SubscriptionEndpointPolicy policy = provider.GetRequiredService<SubscriptionEndpointPolicy>();
-                    return new SocketsHttpHandler
-                    {
-                        AllowAutoRedirect = false,
-                        UseCookies = false,
-                        ConnectTimeout = TimeSpan.FromSeconds(10),
-                        ConnectCallback = async (context, cancellationToken) =>
-                        {
-                            // Check every resolved address when connecting, so DNS cannot redirect a notification to a disallowed address.
-                            IPAddress[] addresses = await Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, cancellationToken);
-                            IPAddress[] allowed = addresses.Where(policy.IsAddressAllowed).ToArray();
-                            if (allowed.Length == 0)
-                            {
-                                throw new HttpRequestException(string.Format(System.Globalization.CultureInfo.InvariantCulture, Core.Resources.SubscriptionEndpointAddressNotAllowed, context.DnsEndPoint.Host));
-                            }
-
-                            var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
-                            try
-                            {
-                                await socket.ConnectAsync(allowed, context.DnsEndPoint.Port, cancellationToken);
-                                return new NetworkStream(socket, ownsSocket: true);
-                            }
-                            catch
-                            {
-                                socket.Dispose();
-                                throw;
-                            }
-                        },
-                    };
-                });
+                .ConfigurePrimaryHttpMessageHandler(provider => CreateRestHookHandler(provider.GetRequiredService<SubscriptionEndpointPolicy>()));
 
             services
                 .RemoveServiceTypeExact<SubscriptionDeliveryService, INotificationHandler<SearchParametersInitializedNotification>>()
@@ -105,6 +74,47 @@ namespace Microsoft.Health.Fhir.Api.Modules
                 .AsSelf()
                 .AsService<IHostedService>()
                 .AsService<INotificationHandler<SearchParametersInitializedNotification>>();
+        }
+
+        /// <summary>
+        /// Creates the handler for rest-hook notifications. Every address the endpoint resolves to is checked when connecting, so DNS
+        /// cannot redirect a notification to a disallowed address. Proxies are not used, because the check would then apply to the
+        /// proxy rather than the endpoint, and redirects are not followed.
+        /// </summary>
+        /// <param name="policy">The endpoint policy.</param>
+        /// <returns>The handler.</returns>
+        public static SocketsHttpHandler CreateRestHookHandler(SubscriptionEndpointPolicy policy)
+        {
+            EnsureArg.IsNotNull(policy, nameof(policy));
+
+            return new SocketsHttpHandler
+            {
+                UseProxy = false,
+                AllowAutoRedirect = false,
+                UseCookies = false,
+                ConnectTimeout = TimeSpan.FromSeconds(10),
+                ConnectCallback = async (context, cancellationToken) =>
+                {
+                    IPAddress[] addresses = await Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, cancellationToken);
+                    IPAddress[] allowed = addresses.Where(policy.IsAddressAllowed).ToArray();
+                    if (allowed.Length == 0)
+                    {
+                        throw new HttpRequestException(string.Format(System.Globalization.CultureInfo.InvariantCulture, Core.Resources.SubscriptionEndpointAddressNotAllowed, context.DnsEndPoint.Host));
+                    }
+
+                    var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+                    try
+                    {
+                        await socket.ConnectAsync(allowed, context.DnsEndPoint.Port, cancellationToken);
+                        return new NetworkStream(socket, ownsSocket: true);
+                    }
+                    catch
+                    {
+                        socket.Dispose();
+                        throw;
+                    }
+                },
+            };
         }
     }
 }

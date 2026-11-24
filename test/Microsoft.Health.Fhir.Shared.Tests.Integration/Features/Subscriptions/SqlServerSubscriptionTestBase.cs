@@ -59,7 +59,7 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
             Output = output;
             Fixture = fixture;
             Sql = (SqlServerFhirStorageTestsFixture)fixture.Service;
-            Store = new SqlServerSubscriptionStore(Sql.SqlRetryService, Sql.SqlServerFhirModel, NullLogger<SqlServerSubscriptionStore>.Instance);
+            Store = new SqlServerSubscriptionStore(Sql.SqlRetryService, Sql.SqlServerFhirModel, Sql.SchemaInformation, NullLogger<SqlServerSubscriptionStore>.Instance);
         }
 
         protected FhirStorageTestsFixture Fixture { get; }
@@ -86,7 +86,7 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
         public ValueTask InitializeAsync()
         {
             ExecuteSql("DELETE FROM dbo.SubscriptionEvents; DELETE FROM dbo.SubscriptionStates; DELETE FROM dbo.Parameters WHERE Id IN ('" +
-                SqlServerSubscriptionStore.CursorId + "', '" + ResourceChangeDataEventSource.ChangeFeedCursorId + "')");
+                SqlServerSubscriptionStore.CursorId + "', '" + ResourceChangeDataEventSource.ChangeFeedCursorId + "', '" + SqlServerSubscriptionStore.EventSourceId + "')");
             return ValueTask.CompletedTask;
         }
 
@@ -112,6 +112,7 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
                 ChannelType = "rest-hook",
                 Endpoint = "https://hooks.example.com/notify",
                 ContentType = "application/fhir+json",
+                End = DateTimeOffset.UtcNow.AddDays(7),
             };
 
             IOptions<SubscriptionsConfiguration> options = Options.Create(Configuration);

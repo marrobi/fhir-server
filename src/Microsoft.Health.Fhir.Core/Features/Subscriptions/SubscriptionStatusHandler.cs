@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using EnsureThat;
 using Medino;
 using Microsoft.Extensions.Options;
+using Microsoft.Health.Abstractions.Exceptions;
 using Microsoft.Health.Core.Features.Context;
 using Microsoft.Health.Core.Features.Security.Authorization;
 using Microsoft.Health.Fhir.Core.Configs;
@@ -72,6 +73,14 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
                 throw new OperationNotImplementedException(Core.Resources.SubscriptionsNotEnabled);
             }
 
+            switch (_store.Availability)
+            {
+                case SubscriptionStoreAvailability.NotSupported:
+                    throw new OperationNotImplementedException(Core.Resources.SubscriptionsRequireSqlServer);
+                case SubscriptionStoreAvailability.NotReady:
+                    throw new ServiceUnavailableException();
+            }
+
             if (request.SubscriptionIds.Count == 0)
             {
                 throw new RequestNotValidException(Core.Resources.SubscriptionStatusIdRequired);
@@ -122,7 +131,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
                 });
             }
 
-            return new SubscriptionStatusResponse(_notificationFactory.CreateStatusBundle(statuses));
+            return new SubscriptionStatusResponse(_notificationFactory.CreateStatusBundle(statuses, _requestContextAccessor.RequestContext?.Uri));
         }
     }
 }

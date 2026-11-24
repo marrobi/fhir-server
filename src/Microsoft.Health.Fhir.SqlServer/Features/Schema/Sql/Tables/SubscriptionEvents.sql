@@ -27,7 +27,5 @@ CREATE UNIQUE INDEX IXU_SubscriptionEvents_SubscriptionId_TransactionId_Resource
 GO
 CREATE INDEX IX_SubscriptionEvents_SubscriptionId_Status_EventNumber ON dbo.SubscriptionEvents (SubscriptionId, Status, EventNumber)
 GO
-CREATE INDEX IX_SubscriptionEvents_Status_NextAttemptDate ON dbo.SubscriptionEvents (Status, NextAttemptDate) INCLUDE (SubscriptionId)
-GO
 CREATE INDEX IX_SubscriptionEvents_StatusDate ON dbo.SubscriptionEvents (StatusDate) INCLUDE (Status)
 GO

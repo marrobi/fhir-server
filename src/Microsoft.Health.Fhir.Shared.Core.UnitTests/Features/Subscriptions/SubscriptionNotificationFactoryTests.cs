@@ -103,10 +103,13 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         {
             SubscriptionNotificationRequest status = Request(SubscriptionContentLevel.IdOnly, [], SubscriptionNotificationType.QueryStatus, errors: ["endpoint down"]);
 
-            Bundle bundle = _factory.CreateStatusBundle([status]).ToPoco<Bundle>();
+            var self = new Uri("https://fhir.example/Subscription/s1/$status");
+
+            Bundle bundle = _factory.CreateStatusBundle([status], self).ToPoco<Bundle>();
 
             Assert.Equal(Bundle.BundleType.Searchset, bundle.Type);
             Assert.Equal(1, bundle.Total);
+            Assert.Equal(self.AbsoluteUri, Assert.Single(bundle.Link, l => l.Relation == "self").Url);
             Assert.Contains("query-status", bundle.ToJson(), StringComparison.Ordinal);
             Assert.Contains("endpoint down", bundle.ToJson(), StringComparison.Ordinal);
         }

@@ -45,6 +45,17 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
             return earliestActivationTransactionId.HasValue ? Math.Min(visibility, earliestActivationTransactionId.Value) : visibility;
         }
 
+        public Task<DateTimeOffset?> GetPositionTimeAsync(long position, CancellationToken cancellationToken)
+        {
+            // Transaction ids are surrogate ids, which encode when the transaction began.
+            return Task.FromResult<DateTimeOffset?>(position > 0 ? position.ToLastUpdated() : null);
+        }
+
+        public Task<long> GetPositionBeforeAsync(DateTimeOffset time, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(time.ToSurrogateId());
+        }
+
         public async Task<TransactionEventPage> ReadAsync(long position, int maxPositions, Func<string, bool> isCovered, CancellationToken cancellationToken)
         {
             List<long> transactionIds = await NextTransactionsAsync(position, Math.Max(1, maxPositions), cancellationToken);

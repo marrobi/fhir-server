@@ -16,6 +16,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence
     /// </summary>
     public sealed class UnsupportedSubscriptionStore : ISubscriptionStore
     {
+        public SubscriptionStoreAvailability Availability => SubscriptionStoreAvailability.NotSupported;
+
         public Task<IReadOnlyList<SubscriptionState>> GetStatesAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<SubscriptionState>>([]);
 
         public Task<SubscriptionState> GetStateAsync(string subscriptionId, CancellationToken cancellationToken) => Task.FromResult<SubscriptionState>(null);
@@ -26,7 +28,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence
 
         public Task<long> ActivateAsync(string subscriptionId, CancellationToken cancellationToken) => throw NotSupported();
 
-        public Task DeactivateAsync(string subscriptionId, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task DeactivateAsync(string subscriptionId, bool revokeGrant, CancellationToken cancellationToken) => Task.CompletedTask;
 
         public Task<bool> TryAcquireLeaseAsync(string subscriptionId, string worker, TimeSpan leasePeriod, CancellationToken cancellationToken) => Task.FromResult(false);
 

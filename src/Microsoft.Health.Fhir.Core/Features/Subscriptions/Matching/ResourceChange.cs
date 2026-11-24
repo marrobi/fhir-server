@@ -69,6 +69,12 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
         }
 
         /// <summary>
+        /// Gets the version that filters and authorization apply to: the deleted version for a delete, otherwise the written one.
+        /// Null when that version is unavailable. A delete's own version is an empty tombstone, so it is never used.
+        /// </summary>
+        public ResourceSnapshot Target => Interaction == SubscriptionInteraction.Delete ? Previous : Current;
+
+        /// <summary>
         /// Gets a value indicating whether a preceding version should exist.
         /// </summary>
         public bool HasPreviousVersion => Version > 1;

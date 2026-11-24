@@ -3,6 +3,7 @@
 // Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
 // -------------------------------------------------------------------------------------------------
 
+using System;
 using System.Collections.Generic;
 using Microsoft.Health.Fhir.Core.Models;
 
@@ -25,8 +26,9 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         /// (R4: <c>Parameters</c>; R4B/R5: <c>SubscriptionStatus</c>).
         /// </summary>
         /// <param name="statuses">The status content of each subscription, with type <c>query-status</c>.</param>
+        /// <param name="selfUrl">The request URL, used as the bundle's self link.</param>
         /// <returns>The bundle.</returns>
-        ResourceElement CreateStatusBundle(IReadOnlyList<SubscriptionNotificationRequest> statuses);
+        ResourceElement CreateStatusBundle(IReadOnlyList<SubscriptionNotificationRequest> statuses, Uri selfUrl = null);
 
         /// <summary>
         /// Serializes a resource for delivery in the requested MIME type.

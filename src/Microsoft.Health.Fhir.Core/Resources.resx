@@ -1209,4 +1209,7 @@
   <data name="SubscriptionTopicRequiresHistory" xml:space="preserve">
     <value>The subscription topic triggers on '{0}', which does not keep history (versioning policy no-version). This server requires resource history for subscription topics.</value>
   </data>
+  <data name="SubscriptionEndBeyondMaximum" xml:space="preserve">
+    <value>The subscription must have an end no more than {0} days ahead. Update it through the API to set one.</value>
+  </data>
 </root>

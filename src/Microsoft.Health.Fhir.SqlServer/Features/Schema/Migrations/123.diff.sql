@@ -76,10 +76,6 @@ IF NOT EXISTS (SELECT * FROM sys.indexes WHERE object_id = object_id('dbo.Subscr
   CREATE INDEX IX_SubscriptionEvents_SubscriptionId_Status_EventNumber ON dbo.SubscriptionEvents (SubscriptionId, Status, EventNumber)
 GO
 
-IF NOT EXISTS (SELECT * FROM sys.indexes WHERE object_id = object_id('dbo.SubscriptionEvents') AND name = 'IX_SubscriptionEvents_Status_NextAttemptDate')
-  CREATE INDEX IX_SubscriptionEvents_Status_NextAttemptDate ON dbo.SubscriptionEvents (Status, NextAttemptDate) INCLUDE (SubscriptionId)
-GO
-
 IF NOT EXISTS (SELECT * FROM sys.indexes WHERE object_id = object_id('dbo.SubscriptionEvents') AND name = 'IX_SubscriptionEvents_StatusDate')
   CREATE INDEX IX_SubscriptionEvents_StatusDate ON dbo.SubscriptionEvents (StatusDate) INCLUDE (Status)
 GO
@@ -126,7 +122,8 @@ END CATCH
 GO
 
 -- Sets the activation watermark to the current transaction visibility if it is not already set, and makes retained
--- pending events due again. Only transactions after the watermark are matched for the subscription.
+-- pending events due again. Only transactions after the watermark are matched for the subscription. Each activation
+-- increments Subscriptions.ActivationVersion, which the event pump checks so it never commits events matched without it.
 CREATE OR ALTER PROCEDURE dbo.ActivateSubscription @SubscriptionId varchar(64), @ActivationTransactionId bigint = NULL OUT
 AS
 set nocount on
@@ -140,6 +137,11 @@ BEGIN TRY
   SET @Visibility = isnull((SELECT TOP 1 SurrogateIdRangeFirstValue FROM dbo.Transactions WHERE IsVisible = 1 ORDER BY SurrogateIdRangeFirstValue DESC),-1)
 
   BEGIN TRANSACTION
+
+  -- The counter is locked first, in the same order as EnqueueSubscriptionEvents (counter, state, events), to avoid deadlocks.
+  UPDATE dbo.Parameters WITH (UPDLOCK, HOLDLOCK) SET Bigint = isnull(Bigint, 0) + 1, UpdatedDate = getUTCdate() WHERE Id = 'Subscriptions.ActivationVersion'
+  IF @@rowcount = 0
+    INSERT INTO dbo.Parameters (Id, Bigint, UpdatedDate) SELECT 'Subscriptions.ActivationVersion', 1, getUTCdate()
 
   UPDATE dbo.SubscriptionStates
     SET ActivationTransactionId = isnull(ActivationTransactionId, @Visibility)
@@ -193,19 +195,35 @@ BEGIN CATCH
 END CATCH
 GO
 
-CREATE OR ALTER PROCEDURE dbo.DeactivateSubscription @SubscriptionId varchar(64)
+-- Clears the activation watermark. With @RevokeGrant = 1 (off, entered-in-error or ended) the grant is removed too, so the
+-- subscription cannot be activated again without an authorized API write, and its pending events are marked not authorized.
+CREATE OR ALTER PROCEDURE dbo.DeactivateSubscription @SubscriptionId varchar(64), @RevokeGrant bit = 0
 AS
 set nocount on
+set xact_abort on
 DECLARE @SP varchar(100) = object_name(@@procid)
        ,@Mode varchar(200) = 'S='+isnull(@SubscriptionId,'NULL')
        ,@st datetime = getUTCdate()
 
 BEGIN TRY
-  UPDATE dbo.SubscriptionStates SET ActivationTransactionId = NULL, UpdatedDate = getUTCdate() WHERE SubscriptionId = @SubscriptionId
+  BEGIN TRANSACTION
 
-  EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Rows=@@rowcount
+  UPDATE dbo.SubscriptionStates
+    SET ActivationTransactionId = NULL
+       ,ContentHash = CASE WHEN @RevokeGrant = 1 THEN NULL ELSE ContentHash END
+       ,GrantJson = CASE WHEN @RevokeGrant = 1 THEN NULL ELSE GrantJson END
+       ,UpdatedDate = getUTCdate()
+    WHERE SubscriptionId = @SubscriptionId
+
+  IF @RevokeGrant = 1
+    UPDATE dbo.SubscriptionEvents SET Status = 3, StatusDate = getUTCdate() WHERE SubscriptionId = @SubscriptionId AND Status = 0
+
+  COMMIT TRANSACTION
+
+  EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st
 END TRY
 BEGIN CATCH
+  IF @@trancount > 0 ROLLBACK TRANSACTION
   IF error_number() = 1750 THROW -- Real error is before 1750, cannot trap in SQL.
   EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='Error';
   THROW
@@ -246,7 +264,10 @@ GO
 -- Event numbers continue each subscription's counter. Events for subscriptions that are not activated, or for transactions
 -- at or before the activation watermark, are dropped. Replays are idempotent: existing events are not inserted again,
 -- so they cannot consume extra event numbers, and the cursor never moves backwards.
-CREATE OR ALTER PROCEDURE dbo.EnqueueSubscriptionEvents @Events dbo.SubscriptionEventList READONLY, @CursorId varchar(100), @CursorTransactionId bigint
+-- @ActivationVersion is the activation counter the caller read before the subscription states it matched with. If a
+-- subscription was activated since, the events may be missing it, so nothing is written and @IsStale is set: the caller
+-- must match the same changes again with fresh states.
+CREATE OR ALTER PROCEDURE dbo.EnqueueSubscriptionEvents @Events dbo.SubscriptionEventList READONLY, @CursorId varchar(100), @CursorTransactionId bigint, @ActivationVersion bigint = NULL, @IsStale bit = 0 OUT
 AS
 set nocount on
 set xact_abort on
@@ -272,7 +293,19 @@ BEGIN TRY
     )
   DECLARE @Base TABLE (SubscriptionId varchar(64) COLLATE Latin1_General_100_CS_AS NOT NULL PRIMARY KEY, BaseNumber bigint NOT NULL)
 
+  SET @IsStale = 0
+
   BEGIN TRANSACTION
+
+  -- The update lock serializes with ActivateSubscription, so no activation can commit between this check and the commit.
+  IF @ActivationVersion IS NOT NULL
+     AND isnull((SELECT Bigint FROM dbo.Parameters WITH (UPDLOCK, HOLDLOCK) WHERE Id = 'Subscriptions.ActivationVersion'), 0) <> @ActivationVersion
+  BEGIN
+    SET @IsStale = 1
+    COMMIT TRANSACTION
+    EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Text='Stale activations'
+    RETURN
+  END
 
   -- Locking the state rows serializes concurrent enqueues for a subscription.
   INSERT INTO @New
@@ -408,10 +441,12 @@ DECLARE @SP varchar(100) = object_name(@@procid)
        ,@st datetime = getUTCdate()
 
 BEGIN TRY
-  SELECT DISTINCT SubscriptionId
-    FROM dbo.SubscriptionEvents
-    WHERE Status = 0
-      AND NextAttemptDate <= getUTCdate()
+  -- One probe per activated subscription on IX_SubscriptionEvents_SubscriptionId_Status_EventNumber. Pending events after
+  -- the first batch keep their insert time, so the probe stops at the first unattempted event instead of reading the backlog.
+  SELECT S.SubscriptionId
+    FROM dbo.SubscriptionStates S
+    WHERE S.ActivationTransactionId IS NOT NULL
+      AND EXISTS (SELECT * FROM dbo.SubscriptionEvents E WHERE E.SubscriptionId = S.SubscriptionId AND E.Status = 0 AND E.NextAttemptDate <= getUTCdate())
 
   EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Rows=@@rowcount
 END TRY
@@ -442,7 +477,8 @@ END CATCH
 GO
 
 -- Stores the activation grant of a subscription. A different content hash clears the activation watermark, so the
--- subscription is not matched again until it completes a new handshake.
+-- subscription is not matched again until it completes a new handshake. Pending events matched under the previous content
+-- (filters, endpoint, authorization) are marked not authorized, so they are never sent under the new content.
 CREATE OR ALTER PROCEDURE dbo.SaveSubscriptionGrant @SubscriptionId varchar(64), @ContentHash varchar(64), @GrantJson nvarchar(max)
 AS
 set nocount on
@@ -453,6 +489,16 @@ DECLARE @SP varchar(100) = object_name(@@procid)
 
 BEGIN TRY
   BEGIN TRANSACTION
+
+  -- Lock the state row before the events, in the same order as EnqueueSubscriptionEvents, to avoid deadlocks.
+  DECLARE @PreviousHash varchar(64) = (SELECT ContentHash FROM dbo.SubscriptionStates WITH (UPDLOCK, HOLDLOCK) WHERE SubscriptionId = @SubscriptionId)
+
+  IF isnull(@PreviousHash, '') <> @ContentHash
+    UPDATE dbo.SubscriptionEvents
+      SET Status = 3
+         ,StatusDate = getUTCdate()
+      WHERE SubscriptionId = @SubscriptionId
+        AND Status = 0
 
   UPDATE dbo.SubscriptionStates WITH (UPDLOCK, HOLDLOCK)
     SET ActivationTransactionId = CASE WHEN ContentHash = @ContentHash THEN ActivationTransactionId ELSE NULL END

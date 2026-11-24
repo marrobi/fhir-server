@@ -16,6 +16,11 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence
     /// </summary>
     public interface ISubscriptionStore
     {
+        /// <summary>
+        /// Gets whether the store can be used now. Callers must not use it otherwise.
+        /// </summary>
+        SubscriptionStoreAvailability Availability { get; }
+
         Task<IReadOnlyList<SubscriptionState>> GetStatesAsync(CancellationToken cancellationToken);
 
         Task<SubscriptionState> GetStateAsync(string subscriptionId, CancellationToken cancellationToken);
@@ -37,9 +42,10 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence
         Task<long> ActivateAsync(string subscriptionId, CancellationToken cancellationToken);
 
         /// <summary>
-        /// Clears the activation watermark, so no further transactions are matched.
+        /// Clears the activation watermark, so no further transactions are matched. With <paramref name="revokeGrant"/>, also removes
+        /// the grant and retires pending events, so the subscription cannot be activated again without an authorized API write.
         /// </summary>
-        Task DeactivateAsync(string subscriptionId, CancellationToken cancellationToken);
+        Task DeactivateAsync(string subscriptionId, bool revokeGrant, CancellationToken cancellationToken);
 
         Task<bool> TryAcquireLeaseAsync(string subscriptionId, string worker, TimeSpan leasePeriod, CancellationToken cancellationToken);
 

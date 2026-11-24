@@ -75,11 +75,46 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         [Fact]
         public void GivenAnInactiveSubscription_WhenProcessed_ThenNoEventIsCreated()
         {
-            RegisteredSubscription requested = Subscription("s1", status: SubscriptionStatusCode.Requested);
-            RegisteredSubscription notActivated = Subscription("s2", activation: null);
+            RegisteredSubscription off = Subscription("s1", status: SubscriptionStatusCode.Off);
+            RegisteredSubscription notActivated = Subscription("s2", activation: null, status: SubscriptionStatusCode.Requested);
             RegisteredSubscription noGrant = Subscription("s3", withGrant: false);
 
-            Assert.Empty(_processor.Process([Change()], [requested, notActivated, noGrant]));
+            Assert.Empty(_processor.Process([Change()], [off, notActivated, noGrant]));
+        }
+
+        [Fact]
+        public void GivenASubscriptionActivatedWhoseStoredStatusIsStillRequested_WhenProcessed_ThenItsEventsAreCreated()
+        {
+            // The handshake activates the subscription before the server writes active, and a cached copy can still say requested.
+            RegisteredSubscription justActivated = Subscription("s1", status: SubscriptionStatusCode.Requested);
+
+            Assert.Single(_processor.Process([Change()], [justActivated]));
+        }
+
+        [Fact]
+        public void GivenTopicCriteriaThatThrowAtEvaluation_WhenProcessed_ThenOnlyThatSubscriptionIsAffected()
+        {
+            // An invalid regular expression only fails when evaluated, so topic validation cannot reject it.
+            RegisteredSubscription failing = Subscription("s1", fhirPath: "%current.status.matches('[')");
+            RegisteredSubscription healthy = Subscription("s2");
+
+            IReadOnlyList<SubscriptionEventCandidate> events = _processor.Process([Change()], [failing, healthy]);
+
+            Assert.Contains(events, e => e.SubscriptionId == "s2" && e.Status == SubscriptionEventStatus.Pending);
+            Assert.Contains(events, e => e.SubscriptionId == "s1" && e.Status == SubscriptionEventStatus.Unevaluable);
+        }
+
+        [Fact]
+        public void GivenADeleteWhosePreviousVersionIsGone_WhenProcessedWithAFilter_ThenItIsUnevaluableRatherThanDropped()
+        {
+            // The deleted version's own content is an empty tombstone, so filters cannot be evaluated against it.
+            RegisteredSubscription subscription = Subscription("s1", interactions: [SubscriptionInteraction.Delete], filterPatient: "p1");
+            Observation tombstone = new() { Id = "o1" };
+            ResourceChange delete = SubscriptionTestFixture.Change(tombstone, deleted: true, version: 2, transactionId: 101);
+
+            SubscriptionEventCandidate candidate = Assert.Single(_processor.Process([delete], [subscription]));
+
+            Assert.Equal(SubscriptionEventStatus.Unevaluable, candidate.Status);
         }
 
         [Fact]
@@ -166,17 +201,32 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             SubscriptionGrant grant = default,
             string trigger = "Observation",
             string currentCriteria = null,
-            bool withGrant = true)
+            bool withGrant = true,
+            string fhirPath = null,
+            IReadOnlyList<SubscriptionInteraction> interactions = null,
+            string filterPatient = null)
         {
             grant = withGrant ? grant ?? new SubscriptionGrant { ContentHash = "h" } : null;
+            IReadOnlyList<SubscriptionFilter> filters = filterPatient == null
+                ? []
+                : [new SubscriptionFilter { ResourceType = trigger, FilterParameter = "subject", Value = "Patient/" + filterPatient }];
             return new RegisteredSubscription
             {
                 Id = id,
-                Info = new SubscriptionInfo { Id = id, Status = status, TopicCanonical = "http://example.org/topic", ChannelType = "rest-hook" },
+                Info = new SubscriptionInfo { Id = id, Status = status, TopicCanonical = "http://example.org/topic", ChannelType = "rest-hook", Filters = filters },
                 Topic = new SubscriptionTopicInfo
                 {
                     Canonical = "http://example.org/topic",
-                    ResourceTriggers = [new TopicResourceTrigger { Resource = trigger, QueryCriteria = currentCriteria == null ? null : new TopicQueryCriteria { Current = currentCriteria } }],
+                    ResourceTriggers =
+                    [
+                        new TopicResourceTrigger
+                        {
+                            Resource = trigger,
+                            QueryCriteria = currentCriteria == null ? null : new TopicQueryCriteria { Current = currentCriteria },
+                            FhirPathCriteria = fhirPath,
+                            SupportedInteractions = interactions ?? [],
+                        },
+                    ],
                 },
                 State = new SubscriptionState { SubscriptionId = id, ActivationTransactionId = activation },
                 Grant = grant,
