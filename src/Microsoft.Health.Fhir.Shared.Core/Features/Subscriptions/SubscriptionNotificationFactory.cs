@@ -179,8 +179,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             var status = new SubscriptionStatus
             {
                 Id = Guid.NewGuid().ToString(),
-                Status = EnumUtility.ParseLiteral<SubscriptionStatusCodes>(ToLiteral(request.Status)),
-                Type = EnumUtility.ParseLiteral<SubscriptionStatus.SubscriptionNotificationType>(ToLiteral(request.Type)),
+                Status = Hl7.Fhir.Utility.EnumUtility.ParseLiteral<SubscriptionStatusCodes>(ToLiteral(request.Status)),
+                Type = Hl7.Fhir.Utility.EnumUtility.ParseLiteral<SubscriptionStatus.SubscriptionNotificationType>(ToLiteral(request.Type)),
 #if R5
                 EventsSinceSubscriptionStart = request.EventsSinceSubscriptionStart,
 #else

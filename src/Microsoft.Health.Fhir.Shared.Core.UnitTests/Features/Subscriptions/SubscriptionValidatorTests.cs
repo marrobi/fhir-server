@@ -1,0 +1,162 @@
+// -------------------------------------------------------------------------------------------------
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
+// -------------------------------------------------------------------------------------------------
+
+using System.Collections.Generic;
+using Microsoft.Health.Fhir.Core.Configs;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
+using Microsoft.Health.Fhir.Tests.Common;
+using Microsoft.Health.Test.Utilities;
+using Xunit;
+
+namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
+{
+    [Trait(Traits.OwningTeam, OwningTeam.Fhir)]
+    [Trait(Traits.Category, Categories.Subscriptions)]
+    public class SubscriptionValidatorTests : IClassFixture<SubscriptionTestFixture>
+    {
+        private readonly SubscriptionValidator _validator;
+
+        public SubscriptionValidatorTests(SubscriptionTestFixture fixture)
+        {
+            _validator = fixture.CreateValidator(new SubscriptionsConfiguration { MinHeartbeatPeriodSeconds = 30, MaxTimeoutSeconds = 60 });
+        }
+
+        [Fact]
+        public void GivenAValidTopic_WhenValidated_ThenThereAreNoErrors()
+        {
+            Assert.Empty(_validator.ValidateTopic(ValidTopic()));
+        }
+
+        [Fact]
+        public void GivenATopicWithEventTriggers_WhenValidated_ThenItIsRejected()
+        {
+            Assert.NotEmpty(_validator.ValidateTopic(Copy(ValidTopic(), hasEventTriggers: true)));
+        }
+
+        [Theory]
+        [InlineData(null, "status=finished")]
+        [InlineData("NotAType", null)]
+        [InlineData("Subscription", null)]
+        [InlineData("Encounter", "subject.name=x")]
+        [InlineData("Encounter", "code:in=http://vs")]
+        [InlineData("Encounter", "Patient?gender=male")]
+        public void GivenAnUnsupportedTrigger_WhenValidated_ThenItIsRejected(string resource, string current)
+        {
+            var topic = new SubscriptionTopicInfo
+            {
+                Canonical = "http://example.org/topic",
+                ResourceTriggers = [new TopicResourceTrigger { Resource = resource, QueryCriteria = new TopicQueryCriteria { Current = current } }],
+            };
+
+            Assert.NotEmpty(_validator.ValidateTopic(topic));
+        }
+
+        [Fact]
+        public void GivenAnInvalidFhirPath_WhenValidated_ThenItIsRejected()
+        {
+            var topic = new SubscriptionTopicInfo { Canonical = "http://example.org/topic", ResourceTriggers = [new TopicResourceTrigger { Resource = "Encounter", FhirPathCriteria = "status = (" }] };
+
+            Assert.NotEmpty(_validator.ValidateTopic(topic));
+        }
+
+        [Fact]
+        public void GivenATopicWithoutUrlOrTriggers_WhenValidated_ThenBothAreReported()
+        {
+            Assert.Equal(2, _validator.ValidateTopic(new SubscriptionTopicInfo()).Count);
+        }
+
+        [Fact]
+        public void GivenACanFilterByForAnUnknownParameter_WhenValidated_ThenItIsRejected()
+        {
+            Assert.NotEmpty(_validator.ValidateTopic(Copy(ValidTopic(), canFilterBy: [new TopicCanFilterBy { FilterParameter = "nope" }])));
+        }
+
+        [Fact]
+        public void GivenAValidSubscription_WhenValidated_ThenThereAreNoErrors()
+        {
+            Assert.Empty(_validator.ValidateSubscription(ValidSubscription(), ValidTopic()));
+        }
+
+        [Fact]
+        public void GivenAMissingOrRetiredTopic_WhenValidated_ThenTheSubscriptionIsRejected()
+        {
+            Assert.NotEmpty(_validator.ValidateSubscription(ValidSubscription(), null));
+            Assert.NotEmpty(_validator.ValidateSubscription(ValidSubscription(), Copy(ValidTopic(), status: "retired")));
+        }
+
+        public static IEnumerable<object[]> InvalidSubscriptions()
+        {
+            yield return [With(channelType: "websocket")];
+            yield return [With(endpoint: "http://hooks.example.com/")];
+            yield return [With(endpoint: "https://10.0.0.1/")];
+            yield return [With(contentType: "text/plain")];
+            yield return [With(heartbeat: 5)];
+            yield return [With(timeout: 600)];
+            yield return [With(maxCount: 0)];
+            yield return [With(headers: [new SubscriptionHeader("Host", "evil")])];
+            yield return [With(headers: [new SubscriptionHeader("X-Ok", "a\r\nInjected: 1")])];
+            yield return [With(filters: [new SubscriptionFilter { FilterParameter = "status", Value = "finished" }])];
+            yield return [With(filters: [new SubscriptionFilter { FilterParameter = "subject", Modifier = "missing", Value = "true" }])];
+            yield return [With(filters: [new SubscriptionFilter { FilterParameter = "subject" }])];
+        }
+
+        [Theory]
+        [MemberData(nameof(InvalidSubscriptions))]
+        public void GivenASubscriptionTheServerCannotHonor_WhenValidated_ThenItIsRejected(SubscriptionInfo subscription)
+        {
+            Assert.NotEmpty(_validator.ValidateSubscription(subscription, ValidTopic()));
+        }
+
+        [Fact]
+        public void GivenAFilterAllowedByTheTopic_WhenValidated_ThenItIsAccepted()
+        {
+            SubscriptionInfo subscription = With(filters: [new SubscriptionFilter { ResourceType = "Encounter", FilterParameter = "subject", Value = "Patient/p1" }]);
+
+            Assert.Empty(_validator.ValidateSubscription(subscription, ValidTopic()));
+        }
+
+        private static SubscriptionTopicInfo ValidTopic() => new()
+        {
+            Canonical = "http://example.org/topic/encounter",
+            Status = "active",
+            ResourceTriggers = [new TopicResourceTrigger { Resource = "Encounter", QueryCriteria = new TopicQueryCriteria { Current = "status=cancelled" } }],
+            CanFilterBy = [new TopicCanFilterBy { Resource = "Encounter", FilterParameter = "subject", Modifiers = ["type"] }],
+        };
+
+        private static SubscriptionTopicInfo Copy(SubscriptionTopicInfo topic, bool hasEventTriggers = false, string status = null, IReadOnlyList<TopicCanFilterBy> canFilterBy = null) => new()
+        {
+            Canonical = topic.Canonical,
+            Status = status ?? topic.Status,
+            ResourceTriggers = topic.ResourceTriggers,
+            CanFilterBy = canFilterBy ?? topic.CanFilterBy,
+            HasEventTriggers = hasEventTriggers,
+        };
+
+        private static SubscriptionInfo ValidSubscription() => With();
+
+        private static SubscriptionInfo With(
+            string channelType = "rest-hook",
+            string endpoint = "https://hooks.example.com/notify",
+            string contentType = "application/fhir+json",
+            int? heartbeat = 60,
+            int? timeout = 30,
+            int? maxCount = 10,
+            IReadOnlyList<SubscriptionHeader> headers = null,
+            IReadOnlyList<SubscriptionFilter> filters = null) => new()
+        {
+            Id = "s1",
+            TopicCanonical = "http://example.org/topic/encounter",
+            ChannelType = channelType,
+            Endpoint = endpoint,
+            ContentType = contentType,
+            HeartbeatPeriodSeconds = heartbeat,
+            TimeoutSeconds = timeout,
+            MaxCount = maxCount,
+            Headers = headers ?? [new SubscriptionHeader("Authorization", "Bearer x")],
+            Filters = filters ?? [],
+        };
+    }
+}

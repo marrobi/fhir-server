@@ -24,8 +24,6 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
     /// </summary>
     public sealed class SubscriptionModelConverter : ISubscriptionModelConverter
     {
-        private const string DefaultContentType = "application/fhir+json";
-
 #if Stu3
         public string TopicResourceType => KnownResourceTypes.Basic;
 
@@ -43,6 +41,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
 
         public ResourceElement WithStatus(ResourceElement resource, SubscriptionStatusCode status, string error) => throw new NotSupportedException();
 #else
+        private const string DefaultContentType = "application/fhir+json";
+
         public bool IsSupported => true;
 
 #if R4 && !R4B

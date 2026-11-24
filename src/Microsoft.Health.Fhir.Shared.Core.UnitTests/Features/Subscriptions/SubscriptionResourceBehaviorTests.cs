@@ -1,0 +1,251 @@
+// -------------------------------------------------------------------------------------------------
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
+// -------------------------------------------------------------------------------------------------
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net.Http;
+using System.Threading;
+using Hl7.Fhir.Model;
+using Hl7.Fhir.Serialization;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Primitives;
+using Microsoft.Health.Core.Features.Context;
+using Microsoft.Health.Core.Features.Security.Authorization;
+using Microsoft.Health.Fhir.Core.Configs;
+using Microsoft.Health.Fhir.Core.Exceptions;
+using Microsoft.Health.Fhir.Core.Extensions;
+using Microsoft.Health.Fhir.Core.Features.Context;
+using Microsoft.Health.Fhir.Core.Features.Persistence;
+using Microsoft.Health.Fhir.Core.Features.Security;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions.Authorization;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry;
+using Microsoft.Health.Fhir.Core.Messages.Create;
+using Microsoft.Health.Fhir.Core.Messages.Delete;
+using Microsoft.Health.Fhir.Core.Messages.Upsert;
+using Microsoft.Health.Fhir.Core.Models;
+using Microsoft.Health.Fhir.Tests.Common;
+using Microsoft.Health.Test.Utilities;
+using NSubstitute;
+using Xunit;
+using Task = System.Threading.Tasks.Task;
+
+namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
+{
+    [Trait(Traits.OwningTeam, OwningTeam.Fhir)]
+    [Trait(Traits.Category, Categories.Subscriptions)]
+    public class SubscriptionResourceBehaviorTests : IClassFixture<SubscriptionTestFixture>
+    {
+        private const string TopicUrl = "http://example.org/topic/encounter";
+        private const string Endpoint = "https://hooks.example.com/notify";
+
+        private readonly SubscriptionModelConverter _converter = new();
+        private readonly InMemorySubscriptionStore _store = new();
+        private readonly InMemorySubscriptionResources _resources;
+        private readonly IAuthorizationService<DataActions> _authorizationService = Substitute.For<IAuthorizationService<DataActions>>();
+        private readonly SubscriptionsConfiguration _configuration = new() { Enabled = true, MaxLifetimeDays = 30, MaxActiveSubscriptions = 2 };
+        private readonly SubscriptionResourceBehavior _behavior;
+
+        public SubscriptionResourceBehaviorTests(SubscriptionTestFixture fixture)
+        {
+            _resources = new InMemorySubscriptionResources(_converter);
+            var registry = new SubscriptionRegistry(_resources, _converter, _store, fixture.CreateValidator(_configuration), NullLogger<SubscriptionRegistry>.Instance);
+            var accessor = Substitute.For<RequestContextAccessor<IFhirRequestContext>>();
+            accessor.RequestContext.Returns(new FhirRequestContext("POST", "https://fhir.example/Subscription", "https://fhir.example/", "c1", new Dictionary<string, StringValues>(), new Dictionary<string, StringValues>())
+            {
+                Principal = new System.Security.Claims.ClaimsPrincipal(),
+            });
+
+            _authorizationService.CheckAccess(Arg.Any<DataActions>(), Arg.Any<CancellationToken>()).Returns(c => c.ArgAt<DataActions>(0));
+
+            _behavior = new SubscriptionResourceBehavior(
+                Options.Create(_configuration),
+                _converter,
+                fixture.CreateValidator(_configuration),
+                _resources,
+                _store,
+                registry,
+                fixture.CreateAuthorizer(),
+                _authorizationService,
+                accessor);
+        }
+
+        [Fact]
+        public async Task GivenATopic_WhenCreatedWithoutTheSubscriptionTopicPermission_ThenItIsRejected()
+        {
+            _authorizationService.CheckAccess(Arg.Any<DataActions>(), Arg.Any<CancellationToken>()).Returns(DataActions.Read | DataActions.Write);
+
+            await Assert.ThrowsAsync<UnauthorizedFhirActionException>(() => CreateAsync(Parse(SubscriptionResources.Topic(TopicUrl))));
+        }
+
+        [Fact]
+        public async Task GivenATopic_WhenCreatedWithThePermission_ThenItIsValidatedAndPassedOn()
+        {
+            UpsertResourceResponse response = await CreateAsync(Parse(SubscriptionResources.Topic(TopicUrl)));
+
+            Assert.NotNull(response);
+            await _authorizationService.Received().CheckAccess(DataActions.SubscriptionTopic, Arg.Any<CancellationToken>());
+        }
+
+        [Fact]
+        public async Task GivenAnInvalidTopic_WhenCreated_ThenItIsRejected()
+        {
+            string json = SubscriptionResources.Topic(TopicUrl).Replace("status=cancelled", "subject.name=x", StringComparison.Ordinal);
+
+            await Assert.ThrowsAsync<BadRequestException>(() => CreateAsync(Parse(json)));
+        }
+
+        [Fact]
+        public async Task GivenAValidSubscription_WhenCreated_ThenStatusIsRequestedIdOnlyIsDefaultedEndIsCappedAndAGrantIsSaved()
+        {
+            // Arrange
+            _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
+            ResourceElement subscription = Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, content: null, status: "active"));
+
+            // Act
+            ResourceElement written = null;
+            await CreateAsync(subscription, r => written = r);
+
+            // Assert
+            SubscriptionInfo info = _converter.ToSubscription(written);
+            Assert.Equal(SubscriptionStatusCode.Requested, info.Status);
+            Assert.Equal(SubscriptionContentLevel.IdOnly, info.Content);
+            Assert.NotNull(info.End);
+            Assert.True(info.End <= DateTimeOffset.UtcNow.AddDays(30).AddMinutes(1));
+            SubscriptionGrant grant = SubscriptionGrant.Deserialize(_store.States["new-id"].Grant);
+            Assert.Equal(info.ComputeContentHash(), grant.ContentHash);
+            Assert.Equal("https://fhir.example/", grant.RequestBase);
+        }
+
+        [Fact]
+        public async Task GivenASubscriptionForAnUnknownTopic_WhenCreated_ThenItIsRejected()
+        {
+            await Assert.ThrowsAsync<BadRequestException>(() => CreateAsync(Parse(SubscriptionResources.Subscription("http://example.org/none", Endpoint))));
+        }
+
+        [Fact]
+        public async Task GivenASubscriptionToAPrivateEndpoint_WhenCreated_ThenItIsRejected()
+        {
+            _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
+
+            await Assert.ThrowsAsync<BadRequestException>(() => CreateAsync(Parse(SubscriptionResources.Subscription(TopicUrl, "https://169.254.169.254/latest"))));
+        }
+
+        [Fact]
+        public async Task GivenAnActiveSubscription_WhenUpdatedWithoutContentChanges_ThenItStaysActive()
+        {
+            // Arrange
+            _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
+            _resources.Put(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "s1", status: "active")));
+
+            // Act
+            ResourceElement unchanged = null;
+            ResourceElement moved = null;
+            await UpsertAsync(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "s1", status: "active")), r => unchanged = r);
+            await UpsertAsync(Parse(SubscriptionResources.Subscription(TopicUrl, "https://other.example.com/", id: "s1", status: "active")), r => moved = r);
+
+            // Assert
+            Assert.Equal(SubscriptionStatusCode.Active, _converter.ToSubscription(unchanged).Status);
+            Assert.Equal(SubscriptionStatusCode.Requested, _converter.ToSubscription(moved).Status);
+        }
+
+        [Fact]
+        public async Task GivenTheClientSetsOff_WhenUpdated_ThenOffIsKept()
+        {
+            _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
+            ResourceElement written = null;
+
+            await UpsertAsync(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "s1", status: "off")), r => written = r);
+
+            Assert.Equal(SubscriptionStatusCode.Off, _converter.ToSubscription(written).Status);
+        }
+
+        [Fact]
+        public async Task GivenTheActiveSubscriptionLimit_WhenAnotherIsCreated_ThenItIsRejected()
+        {
+            _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
+            _resources.Put(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "a")));
+            _resources.Put(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "b")));
+
+            await Assert.ThrowsAsync<BadRequestException>(() => CreateAsync(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint))));
+        }
+
+        [Fact]
+        public async Task GivenASubscription_WhenDeleted_ThenItsStateIsRemoved()
+        {
+            await _store.SaveGrantAsync("s1", "h", "{}", CancellationToken.None);
+
+            await _behavior.HandleAsync(new DeleteResourceRequest("Subscription", "s1", DeleteOperation.SoftDelete), () => Task.FromResult(new DeleteResourceResponse(new ResourceKey("Subscription", "s1"))), CancellationToken.None);
+
+            Assert.False(_store.States.ContainsKey("s1"));
+        }
+
+        [Fact]
+        public async Task GivenAStoredTopic_WhenDeletedWithoutThePermission_ThenItIsRejected()
+        {
+            _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
+            _authorizationService.CheckAccess(Arg.Any<DataActions>(), Arg.Any<CancellationToken>()).Returns(DataActions.Delete);
+
+            await Assert.ThrowsAsync<UnauthorizedFhirActionException>(() => _behavior.HandleAsync(
+                new DeleteResourceRequest(_converter.TopicResourceType, "t1", DeleteOperation.SoftDelete),
+                () => Task.FromResult(new DeleteResourceResponse(new ResourceKey(_converter.TopicResourceType, "t1"))),
+                CancellationToken.None));
+        }
+
+#if R4 && !R4B
+        [Fact]
+        public async Task GivenAStoredBasicTopic_WhenOverwrittenWithAnOrdinaryBasic_ThenThePermissionIsStillRequired()
+        {
+            _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
+            _authorizationService.CheckAccess(Arg.Any<DataActions>(), Arg.Any<CancellationToken>()).Returns(DataActions.Write);
+            var ordinary = new Basic { Id = "t1", Code = new CodeableConcept("http://example.org", "x") };
+
+            await Assert.ThrowsAsync<UnauthorizedFhirActionException>(() => UpsertAsync(ordinary.ToResourceElement()));
+        }
+
+        [Fact]
+        public async Task GivenAnOrdinaryBasic_WhenWritten_ThenThePermissionIsNotRequired()
+        {
+            _authorizationService.CheckAccess(Arg.Any<DataActions>(), Arg.Any<CancellationToken>()).Returns(DataActions.Write);
+            var ordinary = new Basic { Id = "b9", Code = new CodeableConcept("http://example.org", "x") };
+
+            Assert.NotNull(await UpsertAsync(ordinary.ToResourceElement()));
+        }
+#endif
+
+        [Fact]
+        public async Task GivenTheFeatureIsDisabled_WhenAnythingIsWritten_ThenItPassesThroughUnchecked()
+        {
+            _configuration.Enabled = false;
+
+            Assert.NotNull(await CreateAsync(Parse(SubscriptionResources.Subscription("http://example.org/none", "http://10.0.0.1/"))));
+        }
+
+        private System.Threading.Tasks.Task<UpsertResourceResponse> CreateAsync(ResourceElement resource, Action<ResourceElement> capture = null)
+        {
+            return _behavior.HandleAsync(new CreateResourceRequest(resource), () => Respond(resource, capture), CancellationToken.None);
+        }
+
+        private System.Threading.Tasks.Task<UpsertResourceResponse> UpsertAsync(ResourceElement resource, Action<ResourceElement> capture = null)
+        {
+            return _behavior.HandleAsync(new UpsertResourceRequest(resource), () => Respond(resource, capture), CancellationToken.None);
+        }
+
+        private static System.Threading.Tasks.Task<UpsertResourceResponse> Respond(ResourceElement resource, Action<ResourceElement> capture)
+        {
+            Resource poco = resource.ToPoco<Resource>();
+            poco.Id ??= "new-id";
+            ResourceElement element = poco.ToResourceElement();
+            capture?.Invoke(element);
+            var wrapper = new ResourceWrapper(element, new RawResource(poco.ToJson(), FhirResourceFormat.Json, true), new ResourceRequest(HttpMethod.Post, "http://fhir"), false, null, null, null, null);
+            return Task.FromResult(new UpsertResourceResponse(new SaveOutcome(new RawResourceElement(wrapper), SaveOutcomeType.Created)));
+        }
+
+        private static ResourceElement Parse(string json) => new FhirJsonParser().Parse<Resource>(json).ToResourceElement();
+    }
+}

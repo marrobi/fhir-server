@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
     <MSBuildAllProjects>$(MSBuildAllProjects);$(MSBuildThisFileFullPath)</MSBuildAllProjects>
@@ -33,6 +33,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Features\Search\InstantDateClockCollection.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Smart\SmartSearchSharedFixture.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Smart\SmartSearchTests.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SqlServerSubscriptionTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Persistence\ExpiredResourceCleanupWatchdogTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Persistence\QueryPlanReuseCheckerTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Persistence\SearchParameterCachePopulationTests.cs" />
