@@ -12,10 +12,13 @@ using EnsureThat;
 using Medino;
 using Microsoft.Extensions.Options;
 using Microsoft.Health.Core.Features.Context;
+using Microsoft.Health.Core.Features.Security.Authorization;
 using Microsoft.Health.Fhir.Core.Configs;
 using Microsoft.Health.Fhir.Core.Exceptions;
 using Microsoft.Health.Fhir.Core.Features.Context;
 using Microsoft.Health.Fhir.Core.Features.Operations;
+using Microsoft.Health.Fhir.Core.Features.Security;
+using Microsoft.Health.Fhir.Core.Features.Security.Authorization;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence;
 using Microsoft.Health.Fhir.Core.Messages.Get;
@@ -29,6 +32,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
     /// </summary>
     public sealed class SubscriptionStatusHandler : IRequestHandler<SubscriptionStatusRequest, SubscriptionStatusResponse>
     {
+        private readonly IAuthorizationService<DataActions> _authorizationService;
         private readonly IMediator _mediator;
         private readonly ISubscriptionResourceLoader _loader;
         private readonly ISubscriptionModelConverter _converter;
@@ -38,6 +42,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         private readonly RequestContextAccessor<IFhirRequestContext> _requestContextAccessor;
 
         public SubscriptionStatusHandler(
+            IAuthorizationService<DataActions> authorizationService,
             IMediator mediator,
             ISubscriptionResourceLoader loader,
             ISubscriptionModelConverter converter,
@@ -46,6 +51,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             IOptions<SubscriptionsConfiguration> configuration,
             RequestContextAccessor<IFhirRequestContext> requestContextAccessor)
         {
+            _authorizationService = EnsureArg.IsNotNull(authorizationService, nameof(authorizationService));
             _mediator = EnsureArg.IsNotNull(mediator, nameof(mediator));
             _loader = EnsureArg.IsNotNull(loader, nameof(loader));
             _converter = EnsureArg.IsNotNull(converter, nameof(converter));
@@ -58,6 +64,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         public async Task<SubscriptionStatusResponse> HandleAsync(SubscriptionStatusRequest request, CancellationToken cancellationToken)
         {
             EnsureArg.IsNotNull(request, nameof(request));
+
+            await _authorizationService.CheckAccess(DataActions.Read, true, cancellationToken);
 
             if (!_configuration.Enabled || !_converter.IsSupported)
             {
@@ -72,7 +80,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             var statuses = new List<SubscriptionNotificationRequest>(request.SubscriptionIds.Count);
             foreach (string id in request.SubscriptionIds)
             {
-                // Reading through the request pipeline applies the caller's authorization, including SMART scopes.
+                // Reading through the request pipeline also applies resource-level authorization, including SMART scopes.
                 await _mediator.SendAsync(new GetResourceRequest(KnownResourceTypes.Subscription, id), cancellationToken);
 
                 ResourceElement resource = await _loader.GetSubscriptionAsync(id, cancellationToken)

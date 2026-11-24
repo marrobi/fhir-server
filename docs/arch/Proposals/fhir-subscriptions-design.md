@@ -387,3 +387,15 @@ For contrast, related work taken through the normal process did merge: the watch
 | 5 | **Merge bar per PR:** PR template completed; CI green; zero new CodeQL findings; unit tests (xUnit/NSubstitute, Arrange-Act-Assert) for new behaviour; E2E tests for HTTP-facing changes; SQL changes include the static index and query assessment required by `AGENTS.md`. | 5 |
 | 6 | **Evidence before scale-sensitive phases.** Phase 0 benchmark results (event pump throughput, head-of-line latency, added database load) are attached to the ADR. Phase 3 and 4 PRs include load-test numbers from `tools/PerfTester`. The v1 release gate (section 7) must pass before release. | 5 |
 | 7 | **No long-lived feature branch.** Phases merge to `main` incrementally (behind the flag) instead of accumulating on a branch that drifts from `main`. | 2, 3 |
+
+## 12. Prototype implementation notes
+
+A reference implementation exists on the `feature/fhir-subscriptions` branch. It is a prototype to validate this design, not a PR: under guardrails 2 and 7 it would be split into the phase PRs of section 7. Where it settles a detail left open above, or differs from it:
+
+- **Storage.** Besides `SubscriptionEvents`, a `SubscriptionStates` table (schema version 123) holds each subscription's activation grant, content hash, activation watermark, last event number, error text and delivery lease. A changed content hash clears the activation, so the next handshake needs a new grant.
+- **Delivery.** Delivery is a hosted background service that takes a per-subscription lease in `SubscriptionStates`, rather than a `TaskManagement` job type. This keeps delivery single-flight per subscription across instances without one job per notification.
+- **Event source.** The pump reads `Transactions` directly. `ITransactionEventSource` is not yet extracted; it would be if the product group chooses the change feed.
+- **Pump start.** On its first run the pump starts its cursor at the visibility watermark, or at the earliest existing activation watermark if that is lower, so a subscription activated before the pump first runs receives every later change.
+- **History.** Instead of gating `InvisibleHistoryCleanupWatchdog` on the cursor, the prototype keeps invisible history for at least `MaxHistoryCleanupHoldHours` while the feature is on. Versions removed earlier are recorded as `Unevaluable`. Tests confirm that `no-version` types lose earlier versions as described in decision 3.
+- **Limits.** Defaults are a 365-day maximum lifetime, 1,000 subscriptions in `requested`, `active` or `error`, 5 delivery attempts and a 60-second minimum heartbeat. All are configurable; see [Subscriptions](../../Subscriptions.md).
+- **Tests.** Unit tests (matching, authorization, validation, conversion, notification shapes, delivery lifecycle), SQL integration tests for the pump and outbox, and in-process E2E tests over HTTP with a local receiver run on R4, R4B and R5. No load or latency benchmark has been run, so guardrail 6 is still open.
