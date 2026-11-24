@@ -1,0 +1,111 @@
+# Topic-based subscriptions (R4, Subscriptions R5 Backport IG). See docs/Subscriptions.md.
+# Targets the local environment in samples/subscriptions (security off, webhook receiver at http://webhook:8080).
+# On R4B and R5 the topic is a SubscriptionTopic resource and Subscription uses the R4B/R5 shape instead.
+
+@hostname = http://localhost:8080
+@topicUrl = http://example.org/fhir/SubscriptionTopic/encounter-finished
+@webhook = http://webhook:8080
+
+### Define a topic as an R4 Basic resource: Encounter changes to status "finished", filterable by subject.
+# @name topic
+POST {{hostname}}/Basic
+Content-Type: application/fhir+json
+
+{
+  "resourceType": "Basic",
+  "code": { "coding": [ { "system": "http://hl7.org/fhir/fhir-types", "code": "SubscriptionTopic" } ] },
+  "extension": [
+    { "url": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.url", "valueUri": "{{topicUrl}}" },
+    { "url": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.status", "valueCode": "active" },
+    {
+      "url": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.resourceTrigger",
+      "extension": [
+        { "url": "resource", "valueUri": "Encounter" },
+        { "url": "supportedInteraction", "valueCode": "create" },
+        { "url": "supportedInteraction", "valueCode": "update" },
+        {
+          "url": "queryCriteria",
+          "extension": [
+            { "url": "previous", "valueString": "status:not=finished" },
+            { "url": "resultForCreate", "valueCode": "test-passes" },
+            { "url": "current", "valueString": "status=finished" },
+            { "url": "requireBoth", "valueBoolean": true }
+          ]
+        }
+      ]
+    },
+    {
+      "url": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.canFilterBy",
+      "extension": [
+        { "url": "resource", "valueUri": "Encounter" },
+        { "url": "filterParameter", "valueString": "subject" }
+      ]
+    }
+  ]
+}
+
+### Find topics
+GET {{hostname}}/Basic?code=http://hl7.org/fhir/fhir-types|SubscriptionTopic
+
+### Subscribe to the topic for one patient, with id-only payloads. The server sets status to "requested" and sends a handshake.
+# @name subscription
+POST {{hostname}}/Subscription
+Content-Type: application/fhir+json
+
+{
+  "resourceType": "Subscription",
+  "meta": { "profile": [ "http://hl7.org/fhir/uv/subscriptions-backport/StructureDefinition/backport-subscription" ] },
+  "status": "requested",
+  "reason": "Notify when an encounter for patient p1 finishes",
+  "criteria": "{{topicUrl}}",
+  "_criteria": {
+    "extension": [
+      { "url": "http://hl7.org/fhir/uv/subscriptions-backport/StructureDefinition/backport-filter-criteria", "valueString": "Encounter?subject=Patient/p1" }
+    ]
+  },
+  "channel": {
+    "extension": [
+      { "url": "http://hl7.org/fhir/uv/subscriptions-backport/StructureDefinition/backport-heartbeat-period", "valueUnsignedInt": 3600 },
+      { "url": "http://hl7.org/fhir/uv/subscriptions-backport/StructureDefinition/backport-max-count", "valuePositiveInt": 10 }
+    ],
+    "type": "rest-hook",
+    "endpoint": "{{webhook}}/hook",
+    "payload": "application/fhir+json",
+    "_payload": {
+      "extension": [
+        { "url": "http://hl7.org/fhir/uv/subscriptions-backport/StructureDefinition/backport-payload-content", "valueCode": "id-only" }
+      ]
+    },
+    "header": [ "Authorization: Bearer subscriber-secret" ]
+  }
+}
+
+### The status becomes "active" once the handshake succeeds.
+GET {{hostname}}/Subscription/{{subscription.response.body.id}}
+
+### A matching change: the encounter for p1 finishes.
+PUT {{hostname}}/Encounter/enc-1
+Content-Type: application/fhir+json
+
+{
+  "resourceType": "Encounter",
+  "id": "enc-1",
+  "status": "finished",
+  "class": { "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "AMB" },
+  "subject": { "reference": "Patient/p1" }
+}
+
+### Subscription status: events since start, status and any error.
+GET {{hostname}}/Subscription/{{subscription.response.body.id}}/$status
+
+### Status for several subscriptions at once.
+GET {{hostname}}/Subscription/$status?id={{subscription.response.body.id}}
+
+### Notifications received by the sample webhook receiver (port 8081 on the host).
+GET http://localhost:8081/notifications
+
+### Stop notifications without deleting the subscription.
+# Read the subscription, set "status": "off", and PUT it back. Setting it to "requested" again starts a new handshake.
+
+### Delete the subscription.
+DELETE {{hostname}}/Subscription/{{subscription.response.body.id}}

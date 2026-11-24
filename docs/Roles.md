@@ -16,6 +16,7 @@ The set of data actions that can be part of a role definition are:
 - `hardDelete` is required, in addition to `delete`, for hard-deleting data.
 - `export` is required for exporting data, in addition to `read`
 - `resourceValidate` is required for invoking the [validate resource operation](https://www.hl7.org/fhir/operation-resource-validate.html).
+- `subscriptionTopic` is required, in addition to `write` or `delete`, for creating, updating or deleting subscription topics (`SubscriptionTopic`, or `Basic` topics on R4). See [Topic-based subscriptions](Subscriptions.md).
 
 Roles are defined in the [roles.json](../src/Microsoft.Health.Fhir.Shared.Web/roles.json) file. Administrators can customize them if desired. A role definition looks like this:
 

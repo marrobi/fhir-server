@@ -117,9 +117,15 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
             long? cursor = await _subscriptionStore.GetCursorAsync(cancellationToken);
             if (cursor == null)
             {
-                // First run: start from now. Subscriptions never receive changes from before their activation anyway.
-                await _subscriptionStore.EnqueueAsync([], visibility, cancellationToken);
-                _logger.LogInformation("Subscription event pump initialized at transaction {TransactionId}.", visibility);
+                // First run: start from now, but never past an existing activation, whose subscription is owed every later change.
+                IReadOnlyList<SubscriptionState> activated = await _subscriptionStore.GetStatesAsync(cancellationToken);
+                long start = activated
+                    .Where(s => s.ActivationTransactionId != null)
+                    .Select(s => s.ActivationTransactionId.Value)
+                    .Append(visibility)
+                    .Min();
+                await _subscriptionStore.EnqueueAsync([], start, cancellationToken);
+                _logger.LogInformation("Subscription event pump initialized at transaction {TransactionId}.", start);
                 return 0;
             }
 

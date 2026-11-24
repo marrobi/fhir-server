@@ -21,7 +21,8 @@
                 "search",
                 "readById",
                 "create",
-                "update"
+                "update",
+                "subscriptionTopic"
             ]
         }
     },

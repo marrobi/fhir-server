@@ -41,6 +41,12 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
         private const string TopicType = "SubscriptionTopic";
 #endif
 
+#if R5
+        private const string NotificationBundleType = "subscription-notification";
+#else
+        private const string NotificationBundleType = "history";
+#endif
+
         public SubscriptionTests(SubscriptionsTestFixture fixture)
         {
             _fixture = fixture;
@@ -80,7 +86,7 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
                 Assert.Single(Webhook.For(path), IsEvent);
 
                 var bundle = JObject.Parse(notification.Body);
-                Assert.Equal("history", (string)bundle["type"]);
+                Assert.Equal(NotificationBundleType, (string)bundle["type"]);
                 JToken focusEntry = bundle["entry"].Skip(1).Single();
                 Assert.EndsWith($"Encounter/{encounterId}", (string)focusEntry["fullUrl"], StringComparison.Ordinal);
                 Assert.Null(focusEntry["resource"]);

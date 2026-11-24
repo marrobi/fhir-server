@@ -275,6 +275,25 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
         }
 
         [Fact]
+        public async Task GivenASubscriptionActivatedBeforeThePumpFirstRuns_WhenPumped_ThenChangesAfterTheActivationAreMatched()
+        {
+            // Arrange: activation happens before the pump has a cursor, and a change commits before the pump's first run.
+            SubscriptionEventWatchdog pump = CreatePump("true");
+            await AdvanceVisibilityAsync();
+            await ActivateSubscriptionAsync("s1");
+            string id = await CreateObservationAsync("preliminary");
+            await AdvanceVisibilityAsync();
+
+            // Act
+            await pump.PumpAsync(CancellationToken.None); // initializes the cursor
+            await pump.PumpAsync(CancellationToken.None);
+
+            // Assert
+            SubscriptionEventRecord e = Assert.Single(await _store.GetPendingEventsAsync("s1", 10, CancellationToken.None));
+            Assert.Equal(id, e.ResourceId);
+        }
+
+        [Fact]
         public async Task GivenADelete_WhenPumped_ThenADeleteEventIsRecorded()
         {
             SubscriptionEventWatchdog pump = CreatePump("true", SubscriptionInteraction.Delete);
