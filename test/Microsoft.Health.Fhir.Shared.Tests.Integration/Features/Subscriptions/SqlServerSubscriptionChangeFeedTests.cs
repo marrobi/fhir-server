@@ -62,6 +62,33 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
         }
 
         [Fact]
+        public async Task GivenChangeRecordsOfOneWriteWhoseVersionsAreGone_WhenPumped_ThenEachIsRecordedAsADistinctUnevaluableEvent()
+        {
+            // Arrange: two change records with the same timestamp, as one write produces, for versions that are no longer stored.
+            SubscriptionEventWatchdog pump = CreatePump("true", SubscriptionInteraction.Create);
+            await pump.PumpAsync(CancellationToken.None); // initializes the cursor
+            await ActivateSubscriptionAsync("s1");
+            string first = Guid.NewGuid().ToString();
+            string second = Guid.NewGuid().ToString();
+            ExecuteSql($@"
+DECLARE @TypeId smallint = (SELECT ResourceTypeId FROM dbo.ResourceType WHERE Name = 'Observation')
+DECLARE @Now datetime2(7) = sysutcdatetime()
+INSERT INTO dbo.ResourceChangeData (Timestamp, ResourceId, ResourceTypeId, ResourceVersion, ResourceChangeTypeId)
+  VALUES (@Now, '{first}', @TypeId, 1, 0), (@Now, '{second}', @TypeId, 1, 0)");
+
+            // Act
+            await pump.PumpAsync(CancellationToken.None);
+
+            // Assert
+            Output.WriteLine(Dump("SELECT 'state', SubscriptionId, ActivationTransactionId FROM dbo.SubscriptionStates"));
+            Output.WriteLine(Dump($"SELECT 'cursor', Id, Bigint, Char FROM dbo.Parameters WHERE Id LIKE 'SubscriptionEventWatchdog%'"));
+            Output.WriteLine(Dump($"SELECT TOP 5 'change', Id, Timestamp, ResourceId FROM dbo.ResourceChangeData ORDER BY Id DESC"));
+            Output.WriteLine(Dump($"SELECT ResourceId, Status, TransactionId, ResourceSurrogateId FROM dbo.SubscriptionEvents WHERE SubscriptionId = 's1' AND ResourceId IN ('{first}', '{second}')"));
+            Assert.Equal(2, ExecuteScalar<int>($"SELECT count(DISTINCT ResourceSurrogateId) FROM dbo.SubscriptionEvents WHERE SubscriptionId = 's1' AND ResourceId IN ('{first}', '{second}') AND Status = {(int)SubscriptionEventStatus.Unevaluable}"));
+            Assert.Equal(1, ExecuteScalar<int>($"SELECT count(DISTINCT TransactionId) FROM dbo.SubscriptionEvents WHERE SubscriptionId = 's1' AND ResourceId IN ('{first}', '{second}')"));
+        }
+
+        [Fact]
         public async Task GivenASubscriptionActivatedBeforeTheChangeFeedSourceFirstRuns_WhenPumped_ThenChangesAfterTheActivationAreMatched()
         {
             // Arrange
@@ -79,52 +106,28 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
         }
 
         [Fact]
-        public async Task GivenAStaleCursorFromAnEarlierUse_WhenTheSourceIsSwitchedBack_ThenItStartsAtTheHandOverInsteadOfResuming()
+        public async Task GivenADatabaseStartedWithTheTransactionsSource_WhenTheChangeFeedSourceIsConfigured_ThenThePumpDoesNotRunAndKeepsTheCursor()
         {
-            // Arrange: the change feed source is in use, and the Transactions cursor is left over from three days ago.
-            SubscriptionEventWatchdog changeFeedPump = CreatePump("true");
-            await changeFeedPump.PumpAsync(CancellationToken.None);
+            // Arrange
+            Configuration.EventSource = SubscriptionEventSource.Transactions;
+            await AdvanceVisibilityAsync();
+            await CreatePump("true").PumpAsync(CancellationToken.None);
+            long? transactionsCursor = await Store.GetCursorAsync(CancellationToken.None);
             await ActivateSubscriptionAsync("s1");
-            string id = await CreateObservationAsync("preliminary");
-            await changeFeedPump.PumpAsync(CancellationToken.None);
-            long stale = DateTimeOffset.UtcNow.AddDays(-3).ToSurrogateId();
-            ExecuteSql($"INSERT INTO dbo.Parameters (Id, Bigint) VALUES ('{SqlServerSubscriptionStore.CursorId}', {stale})");
+            await CreateObservationAsync("preliminary");
 
             // Act
-            Configuration.EventSource = SubscriptionEventSource.Transactions;
-            SubscriptionEventWatchdog transactionsPump = CreatePump("true");
-            await AdvanceVisibilityAsync();
-            await transactionsPump.PumpAsync(CancellationToken.None); // hands over
-            long start = (await Store.GetCursorAsync(CancellationToken.None)).Value;
-            await transactionsPump.PumpAsync(CancellationToken.None);
-
-            // Assert: started an hour before the change feed's last change, not three days back; the re-read change is not numbered again.
-            Assert.True(start >= DateTimeOffset.UtcNow.AddHours(-2).ToSurrogateId(), $"Started at {start.ToLastUpdated():o}.");
-            Assert.Single(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None), r => r.ResourceId == id);
-        }
-
-        [Fact]
-        public async Task GivenEventsFromTheTransactionsSource_WhenTheSourceIsSwitchedToTheChangeFeed_ThenTheSameChangesAreNotNumberedAgain()
-        {
-            // Arrange: match a change through the Transactions source first.
-            Configuration.EventSource = SubscriptionEventSource.Transactions;
-            SubscriptionEventWatchdog pump = CreatePump("true");
-            await AdvanceVisibilityAsync();
-            await pump.PumpAsync(CancellationToken.None);
-            await ActivateSubscriptionAsync("s1");
-            string id = await CreateObservationAsync("preliminary");
-            await AdvanceVisibilityAsync();
-            await pump.PumpAsync(CancellationToken.None);
-            Assert.Single(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None), r => r.ResourceId == id);
-
-            // Act: the change feed source starts before the activation, so it reads the same change again.
             Configuration.EventSource = SubscriptionEventSource.ResourceChangeData;
             SubscriptionEventWatchdog changeFeedPump = CreatePump("true");
-            await changeFeedPump.PumpAsync(CancellationToken.None);
-            await changeFeedPump.PumpAsync(CancellationToken.None);
+            int first = await changeFeedPump.PumpAsync(CancellationToken.None);
+            int second = await changeFeedPump.PumpAsync(CancellationToken.None);
 
             // Assert
-            Assert.Single(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None), r => r.ResourceId == id);
+            Assert.Equal(0, first + second);
+            Assert.Empty(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None));
+            Assert.Null(await Store.GetCursorAsync(ResourceChangeDataEventSource.ChangeFeedCursorId, CancellationToken.None));
+            Assert.Equal(transactionsCursor, await Store.GetCursorAsync(CancellationToken.None));
+            Assert.Equal(nameof(SubscriptionEventSource.Transactions), await Store.GetEventSourceAsync(CancellationToken.None));
         }
     }
 }

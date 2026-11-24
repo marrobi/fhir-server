@@ -296,8 +296,8 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
         }
 
         /// <summary>
-        /// Records the event source the pump uses and, when <paramref name="position"/> is set, sets that source's cursor to it,
-        /// even if that moves the cursor backwards. Used when the pump starts or changes source.
+        /// Records the event source the pump uses and sets that source's cursor to <paramref name="position"/>. Used once, when the
+        /// pump first runs.
         /// </summary>
         /// <param name="source">The source name.</param>
         /// <param name="cursorId">The source's cursor id.</param>

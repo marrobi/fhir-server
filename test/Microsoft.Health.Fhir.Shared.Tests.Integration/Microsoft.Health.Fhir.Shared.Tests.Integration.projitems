@@ -34,6 +34,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Features\Smart\SmartSearchSharedFixture.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Smart\SmartSearchTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SqlServerSubscriptionChangeFeedTests.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SqlServerSubscriptionPumpCrashTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SqlServerSubscriptionTestBase.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SqlServerSubscriptionTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionChangeCaptureFixture.cs" />

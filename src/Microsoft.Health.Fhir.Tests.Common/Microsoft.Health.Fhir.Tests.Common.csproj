@@ -259,6 +259,8 @@
     <EmbeddedResource Include="TestFiles\R4\FhirPackage-SearchParameters.tgz" />
     <EmbeddedResource Include="TestFiles\R4B\FhirPackage-SearchParameters.tgz" />
     <EmbeddedResource Include="TestFiles\R5\FhirPackage-SearchParameters.tgz" />
+    <EmbeddedResource Include="TestFiles\R4\FhirPackage-SubscriptionsBackport.tgz" />
+    <EmbeddedResource Include="TestFiles\R4B\FhirPackage-SubscriptionsBackport.tgz" />
     <EmbeddedResource Include="TestFiles\R4\account-example.json" />
     <EmbeddedResource Include="TestFiles\R4\activitydefinition-example.json" />
     <EmbeddedResource Include="TestFiles\R4\adverseevent-example.json" />

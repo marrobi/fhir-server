@@ -170,6 +170,74 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
         }
 
         [Fact]
+        public async Task GivenAnEmptyContentSubscription_WhenAMatchingChangeOccurs_ThenTheNotificationHasOnlyTheStatusWithoutFocus()
+        {
+            Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires an in-proc server with subscriptions enabled and a local receiver.");
+            string path = NewPath();
+            string topicUrl = await CreateTopicAsync();
+            string patient = Guid.NewGuid().ToString("N");
+            string subscriptionId = await CreateActiveSubscriptionAsync(topicUrl, path, "empty", $"Encounter?subject=Patient/{patient}");
+
+            try
+            {
+                string encounterId = Guid.NewGuid().ToString("N");
+                await PutEncounterAsync(encounterId, patient, "cancelled");
+
+                ReceivedNotification notification = await Webhook.WaitForAsync(path, IsEvent, Timeout);
+
+                var bundle = JObject.Parse(notification.Body);
+                Assert.Equal(NotificationBundleType, (string)bundle["type"]);
+                Assert.Single(bundle["entry"]);
+                Assert.Equal("1", EventNumbers(bundle).Single());
+                Assert.DoesNotContain("focus", notification.Body, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain(encounterId, notification.Body, StringComparison.Ordinal);
+            }
+            finally
+            {
+                await SendAsync(HttpMethod.Delete, $"Subscription/{subscriptionId}");
+            }
+        }
+
+        [Fact]
+        public async Task GivenAnXmlSubscription_WhenItIsActivatedAndAChangeMatches_ThenHandshakeAndNotificationAreFhirXml()
+        {
+            Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires an in-proc server with subscriptions enabled and a local receiver.");
+            string path = NewPath();
+            string topicUrl = await CreateTopicAsync();
+            string patient = Guid.NewGuid().ToString("N");
+
+            (HttpStatusCode code, JObject subscription) = await SendAsync(
+                HttpMethod.Post,
+                "Subscription",
+                SubscriptionResources.Subscription(topicUrl, Webhook.BaseUrl + path, content: "full-resource", filter: $"Encounter?subject=Patient/{patient}", contentType: "application/fhir+xml"));
+            AssertStatus(HttpStatusCode.Created, code, subscription);
+            string subscriptionId = (string)subscription["id"];
+
+            try
+            {
+                ReceivedNotification handshake = await Webhook.WaitForAsync(path, n => n.Body.Contains("handshake", StringComparison.Ordinal), Timeout);
+                Assert.StartsWith("application/fhir+xml", handshake.ContentType, StringComparison.Ordinal);
+                Assert.Equal(NotificationBundleType, Hl7.Fhir.Utility.EnumUtility.GetLiteral(ParseXml(handshake.Body).Type));
+                await WaitForStatusAsync(subscriptionId, "active");
+
+                string encounterId = Guid.NewGuid().ToString("N");
+                await PutEncounterAsync(encounterId, patient, "cancelled");
+
+                ReceivedNotification notification = await Webhook.WaitForAsync(path, n => n.Body.Contains("event-notification", StringComparison.Ordinal), Timeout);
+                Assert.StartsWith("application/fhir+xml", notification.ContentType, StringComparison.Ordinal);
+                Hl7.Fhir.Model.Bundle bundle = ParseXml(notification.Body);
+                Assert.Equal(NotificationBundleType, Hl7.Fhir.Utility.EnumUtility.GetLiteral(bundle.Type));
+                Hl7.Fhir.Model.Bundle.EntryComponent focus = bundle.Entry.Skip(1).Single();
+                Assert.EndsWith($"Encounter/{encounterId}", focus.FullUrl, StringComparison.Ordinal);
+                Assert.Equal(encounterId, focus.Resource.Id);
+            }
+            finally
+            {
+                await SendAsync(HttpMethod.Delete, $"Subscription/{subscriptionId}");
+            }
+        }
+
+        [Fact]
         public async Task GivenAFailingEndpoint_WhenTheSubscriptionIsCreated_ThenItMovesToErrorAndStatusReportsTheFailure()
         {
             Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires an in-proc server with subscriptions enabled and a local receiver.");
@@ -303,6 +371,8 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
         }
 
         private static bool IsEvent(ReceivedNotification notification) => notification.Body.Contains("\"event-notification\"", StringComparison.Ordinal);
+
+        private static Hl7.Fhir.Model.Bundle ParseXml(string body) => new Hl7.Fhir.Serialization.FhirXmlParser().Parse<Hl7.Fhir.Model.Bundle>(body);
 
         private static string NewPath() => "/" + Guid.NewGuid().ToString("N");
 

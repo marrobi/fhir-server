@@ -3,6 +3,7 @@
 // Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
 // -------------------------------------------------------------------------------------------------
 
+using System;
 using System.Collections.Generic;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Authorization;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
@@ -25,6 +26,11 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry
         public SubscriptionTopicInfo Topic { get; init; }
 
         public SubscriptionState State { get; init; }
+
+        /// <summary>
+        /// Gets when the subscription resource was last written, which for a server-set status is when that status was set.
+        /// </summary>
+        public DateTimeOffset? LastUpdated { get; init; }
 
         /// <summary>
         /// Gets the grant, when one exists and is bound to the subscription's current content.

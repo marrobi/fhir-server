@@ -17,6 +17,7 @@ namespace Microsoft.Health.Fhir.Core.Logging.Metrics.Handlers
         private readonly Counter<long> _notifications;
         private readonly Histogram<double> _notificationDuration;
         private readonly Counter<long> _statusChanges;
+        private readonly Counter<long> _lateTransactions;
 
         public DefaultSubscriptionMetricHandler(IMeterFactory meterFactory)
             : base(meterFactory)
@@ -27,6 +28,7 @@ namespace Microsoft.Health.Fhir.Core.Logging.Metrics.Handlers
             _notifications = MetricMeter.CreateCounter<long>("Subscriptions.Notifications", description: "Subscription notification attempts, by type and outcome.");
             _notificationDuration = MetricMeter.CreateHistogram<double>("Subscriptions.NotificationDuration", unit: "ms", description: "Duration of subscription notification attempts.");
             _statusChanges = MetricMeter.CreateCounter<long>("Subscriptions.StatusChanges", description: "Subscription status changes made by the server, by new status.");
+            _lateTransactions = MetricMeter.CreateCounter<long>("Subscriptions.LateTransactions", description: "Committed transactions the subscription event pump had already passed.");
         }
 
         public void PumpProgress(int positions, TimeSpan lag)
@@ -59,6 +61,11 @@ namespace Microsoft.Health.Fhir.Core.Logging.Metrics.Handlers
         public void StatusChanged(string status)
         {
             _statusChanges.Add(1, new KeyValuePair<string, object>("status", status));
+        }
+
+        public void LateTransactions(int count)
+        {
+            _lateTransactions.Add(count);
         }
     }
 }

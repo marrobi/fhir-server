@@ -50,6 +50,26 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             Assert.Equal(SubscriptionEventStatus.Pending, single.Status);
         }
 
+        [Fact]
+        public void GivenAReadLag_WhenAChangeHasAnIdShortlyBeforeTheActivationWatermark_ThenItIsMatched()
+        {
+            // Arrange: a transaction id is 80,000 per millisecond, so a 1 s lag spans 80,000,000 ids.
+            var processor = new SubscriptionEventProcessor(
+                _fixture.Matcher,
+                _fixture.CreateAuthorizer(),
+                NullLogger<SubscriptionEventProcessor>.Instance,
+                Options.Create(new SubscriptionsConfiguration { TransactionReadLagSeconds = 1 }));
+            const long activation = 10_000_000_000;
+            ResourceChange withinLag = Change(transactionId: activation - 40_000_000);
+            ResourceChange beyondLag = Change(transactionId: activation - 160_000_000);
+
+            // Act
+            IReadOnlyList<SubscriptionEventCandidate> events = processor.Process([withinLag, beyondLag], [Subscription("s1", activation: activation)]);
+
+            // Assert
+            Assert.Equal(withinLag.TransactionId, Assert.Single(events).Change.TransactionId);
+        }
+
         [Theory]
         [InlineData(false, 0)]
         [InlineData(true, 1)]

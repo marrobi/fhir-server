@@ -41,9 +41,6 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
         private static readonly TimeSpan CleanupInterval = TimeSpan.FromHours(1);
         private static readonly TimeSpan MaxRunTime = TimeSpan.FromSeconds(30);
 
-        // Longer than any expected transaction, so a change committed late by a long transaction is not skipped on hand-over.
-        private static readonly TimeSpan HandoverMargin = TimeSpan.FromHours(1);
-
         private readonly IReadOnlyList<ITransactionEventSource> _sources;
         private readonly SqlServerSubscriptionStore _subscriptionStore;
         private readonly SubscriptionRegistry _registry;
@@ -166,55 +163,36 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
         }
 
         /// <summary>
-        /// Returns the source's cursor, positioning it first when the pump has not used this source before or last used another one.
+        /// Returns the source's cursor, positioning it first when the pump has never run. The source is fixed when the pump first runs:
+        /// if a different source is configured later, the pump stops and reports it, because positions of different sources are not
+        /// comparable.
         /// </summary>
         /// <param name="source">The configured source.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The cursor, or null when it was just positioned and reading starts on the next run.</returns>
+        /// <returns>The cursor, or null when the pump must not read now.</returns>
         private async Task<long?> StartSourceAsync(ITransactionEventSource source, CancellationToken cancellationToken)
         {
             string recorded = await _subscriptionStore.GetEventSourceAsync(cancellationToken);
-            long? cursor = await _subscriptionStore.GetCursorAsync(source.CursorId, cancellationToken);
             string current = source.Kind.ToString();
-            if (string.Equals(recorded, current, StringComparison.Ordinal) && cursor != null)
+            if (recorded != null && !string.Equals(recorded, current, StringComparison.Ordinal))
+            {
+                ReportUnavailable($"The subscription event source is configured as {current}, but this database was started with {recorded}. Changing the event source of an existing database is not supported; set FhirServer:Subscriptions:EventSource back to {recorded}.");
+                return null;
+            }
+
+            long? cursor = await _subscriptionStore.GetCursorAsync(source.CursorId, cancellationToken);
+            if (recorded != null && cursor != null)
             {
                 return cursor;
             }
 
-            ITransactionEventSource previous = recorded == null || string.Equals(recorded, current, StringComparison.Ordinal)
-                ? null
-                : _sources.FirstOrDefault(s => string.Equals(s.Kind.ToString(), recorded, StringComparison.Ordinal));
-
-            if (recorded == null && cursor != null)
-            {
-                // Recorded before the source was tracked: keep the cursor.
-                await _subscriptionStore.SetEventSourceAsync(current, source.CursorId, null, cancellationToken);
-                return cursor;
-            }
-
-            long start;
-            DateTimeOffset? handoverTime = null;
-            if (previous != null && await _subscriptionStore.GetCursorAsync(previous.CursorId, cancellationToken) is long previousCursor)
-            {
-                handoverTime = await previous.GetPositionTimeAsync(previousCursor, cancellationToken);
-            }
-
-            if (handoverTime.HasValue)
-            {
-                // The previous source processed every change up to its cursor. Start a margin earlier, so changes recorded late are
-                // not skipped; changes read again are already in the outbox, which is kept longer than the margin, so they are not numbered twice.
-                start = await source.GetPositionBeforeAsync(handoverTime.Value - HandoverMargin, cancellationToken);
-            }
-            else
-            {
-                // First run: start from now, but never past an existing activation, whose subscription is owed every later change.
-                IReadOnlyList<SubscriptionState> states = await _subscriptionStore.GetStatesAsync(cancellationToken);
-                long? earliestActivation = states.Where(s => s.ActivationTransactionId != null).Select(s => s.ActivationTransactionId).Min();
-                start = await source.GetStartPositionAsync(earliestActivation, cancellationToken);
-            }
+            // First run: start from now, but never past an existing activation, whose subscription is owed every later change.
+            IReadOnlyList<SubscriptionState> states = await _subscriptionStore.GetStatesAsync(cancellationToken);
+            long? earliestActivation = states.Where(s => s.ActivationTransactionId != null).Select(s => s.ActivationTransactionId).Min();
+            long start = await source.GetStartPositionAsync(earliestActivation, cancellationToken);
 
             await _subscriptionStore.SetEventSourceAsync(current, source.CursorId, start, cancellationToken);
-            _logger.LogInformation("Subscription event pump started the {Source} source at position {Position} (previous source: {Previous}).", source.Kind, start, recorded ?? "none");
+            _logger.LogInformation("Subscription event pump started the {Source} source at position {Position}.", source.Kind, start);
             return null;
         }
 
@@ -227,17 +205,20 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
 
             if (reason == null)
             {
-                _reportedUnavailable = null;
                 return source;
             }
 
+            ReportUnavailable(reason);
+            return null;
+        }
+
+        private void ReportUnavailable(string reason)
+        {
             if (!string.Equals(reason, _reportedUnavailable, StringComparison.Ordinal))
             {
                 _logger.LogError("Subscription event pump is not running: {Reason}", reason);
                 _reportedUnavailable = reason;
             }
-
-            return null;
         }
 
         private async Task CleanupIfDueAsync(CancellationToken cancellationToken)

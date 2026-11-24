@@ -195,6 +195,32 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             Assert.Equal(SubscriptionEventStatus.Delivered, Assert.Single(_store.Events).Status);
         }
 
+        [Theory]
+        [InlineData(1, SubscriptionStatusCode.Error, SubscriptionEventStatus.Pending)]
+        [InlineData(100, SubscriptionStatusCode.Off, SubscriptionEventStatus.NotAuthorized)]
+        public async Task GivenASubscriptionInError_WhenProcessedAfterSomeHours_ThenItIsTurnedOffOnlyAfterTheLimit(int hoursInError, SubscriptionStatusCode expectedStatus, SubscriptionEventStatus expectedEventStatus)
+        {
+            // Arrange
+            _configuration.MaxErrorHours = 72;
+            await ActivateAsync("s1");
+            _store.AddEvent("s1", "Encounter", "e1", 1);
+            for (int i = 0; i < 3; i++)
+            {
+                _channel.Results.Enqueue(ChannelDeliveryResult.Failure("HTTP 503"));
+                await RunAsync();
+            }
+
+            Assert.Equal(SubscriptionStatusCode.Error, Status("s1"));
+            _resources.Put(_resources.Resources[("Subscription", "s1")], DateTimeOffset.UtcNow.AddHours(-hoursInError));
+
+            // Act
+            await RunAsync();
+
+            // Assert
+            Assert.Equal(expectedStatus, Status("s1"));
+            Assert.Equal(expectedEventStatus, Assert.Single(_store.Events).Status);
+        }
+
         [Fact]
         public async Task GivenAGrantThatNoLongerAllowsTheResourceType_WhenDelivering_ThenTheEventIsNotSent()
         {

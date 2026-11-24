@@ -171,7 +171,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
             }
         }
 
-        private static bool NeedsWork(RegisteredSubscription subscription, SubscriptionState state, bool hasDueEvents)
+        private bool NeedsWork(RegisteredSubscription subscription, SubscriptionState state, bool hasDueEvents)
         {
             if (subscription.Info == null)
             {
@@ -205,9 +205,16 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
             {
                 SubscriptionStatusCode.Requested => true,
                 SubscriptionStatusCode.Active => hasDueEvents || state?.ActivationTransactionId == null || IsHeartbeatDue(subscription.Info, state),
+                SubscriptionStatusCode.Error => IsErrorExpired(subscription),
                 _ => false,
             };
         }
+
+        private bool IsErrorExpired(RegisteredSubscription subscription) =>
+            subscription.Info?.Status == SubscriptionStatusCode.Error &&
+            _configuration.MaxErrorHours > 0 &&
+            subscription.LastUpdated is DateTimeOffset written &&
+            Clock.UtcNow - written >= TimeSpan.FromHours(_configuration.MaxErrorHours);
 
         private static bool IsHeartbeatDue(SubscriptionInfo info, SubscriptionState state)
         {
@@ -305,6 +312,13 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
             {
                 await DeactivateAsync(info.Id, state, cancellationToken, revokeGrant: true);
                 await SetStatusAsync(info, SubscriptionStatusCode.Off, Core.Resources.SubscriptionEnded, cancellationToken);
+                return;
+            }
+
+            if (IsErrorExpired(subscription))
+            {
+                await DeactivateAsync(info.Id, state, cancellationToken, revokeGrant: true);
+                await SetStatusAsync(info, SubscriptionStatusCode.Off, string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionErrorExpired, _configuration.MaxErrorHours), cancellationToken);
                 return;
             }
 

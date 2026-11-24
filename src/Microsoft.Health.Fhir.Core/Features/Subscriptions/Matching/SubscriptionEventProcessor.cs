@@ -10,6 +10,7 @@ using EnsureThat;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Health.Fhir.Core.Configs;
+using Microsoft.Health.Fhir.Core.Extensions;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Authorization;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry;
@@ -26,6 +27,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
         private readonly SubscriptionAuthorizer _authorizer;
         private readonly ILogger<SubscriptionEventProcessor> _logger;
         private readonly bool _notifyHistoricalVersions;
+        private readonly long _activationMargin;
 
         public SubscriptionEventProcessor(SubscriptionMatcher matcher, SubscriptionAuthorizer authorizer, ILogger<SubscriptionEventProcessor> logger, IOptions<SubscriptionsConfiguration> configuration = null)
         {
@@ -33,6 +35,10 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
             _authorizer = EnsureArg.IsNotNull(authorizer, nameof(authorizer));
             _logger = EnsureArg.IsNotNull(logger, nameof(logger));
             _notifyHistoricalVersions = configuration?.Value?.NotifyHistoricalVersions ?? false;
+
+            // Transaction ids encode SQL time, so a write after activation can get a lower id if the clock steps back.
+            double lagSeconds = Math.Max(0, configuration?.Value?.TransactionReadLagSeconds ?? 0);
+            _activationMargin = new DateTimeOffset(DateTime.MinValue.AddSeconds(lagSeconds), TimeSpan.Zero).ToId();
         }
 
         /// <summary>
@@ -76,7 +82,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
 
                 foreach (RegisteredSubscription subscription in subscriptions)
                 {
-                    if (!subscription.IsMatchable || change.TransactionId <= subscription.State.ActivationTransactionId.Value)
+                    if (!subscription.IsMatchable || change.TransactionId <= subscription.State.ActivationTransactionId.Value - _activationMargin)
                     {
                         continue;
                     }

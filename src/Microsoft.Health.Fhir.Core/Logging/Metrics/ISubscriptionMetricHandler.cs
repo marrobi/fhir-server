@@ -39,5 +39,11 @@ namespace Microsoft.Health.Fhir.Core.Logging.Metrics
         /// </summary>
         /// <param name="status">The new status code.</param>
         void StatusChanged(string status);
+
+        /// <summary>
+        /// Records committed transactions the pump had already passed, whose changes therefore did not notify.
+        /// </summary>
+        /// <param name="count">The number of transactions.</param>
+        void LateTransactions(int count);
     }
 }

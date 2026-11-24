@@ -68,7 +68,7 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
 
         private protected SqlServerSubscriptionStore Store { get; }
 
-        protected SubscriptionsConfiguration Configuration { get; } = new() { Enabled = true };
+        protected SubscriptionsConfiguration Configuration { get; } = new() { Enabled = true, TransactionReadLagSeconds = 0 };
 
         protected ISubscriptionMetricHandler Metrics { get; } = Substitute.For<ISubscriptionMetricHandler>();
 
@@ -82,6 +82,11 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
         private protected StubConverter Converter { get; } = new();
 
         private protected StubLoader Loader { get; } = new();
+
+        /// <summary>
+        /// Gets or sets a decorator applied to each event source of pumps created afterwards, for example to inject failures.
+        /// </summary>
+        private protected Func<ITransactionEventSource, ITransactionEventSource> WrapSource { get; set; }
 
         public ValueTask InitializeAsync()
         {
@@ -134,12 +139,12 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
             var changeFeed = new SqlServerFhirResourceChangeDataStore(Sql.SqlConnectionWrapperFactory, NullLogger<SqlServerFhirResourceChangeDataStore>.Instance, Sql.SchemaInformation);
             ITransactionEventSource[] sources =
             [
-                new TransactionsEventSource(reader),
+                new TransactionsEventSource(reader, options, XUnitLogger<TransactionsEventSource>.Create(Output), Metrics),
                 new ResourceChangeDataEventSource(changeFeed, reader, Options.Create(new CoreFeatureConfiguration { SupportsResourceChangeCapture = ChangeCaptureEnabled })),
             ];
 
             return new SubscriptionEventWatchdog(
-                sources,
+                WrapSource == null ? sources : sources.Select(WrapSource).ToArray(),
                 Store,
                 registry,
                 processor,
@@ -149,6 +154,17 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
                 Sql.SqlRetryService,
                 XUnitLogger<SubscriptionEventWatchdog>.Create(Output),
                 Metrics);
+        }
+
+        private protected TransactionsEventSource CreateTransactionsSource()
+        {
+            var reader = new SqlResourceChangeReader(
+                Sql.SqlServerFhirDataStore.StoreClient,
+                Sql.SqlServerFhirModel,
+                new CompressedRawResourceConverter(),
+                Fixture.Deserializer,
+                XUnitLogger<SqlResourceChangeReader>.Create(Output));
+            return new TransactionsEventSource(reader, Options.Create(Configuration), XUnitLogger<TransactionsEventSource>.Create(Output), Metrics) { LateCheckPeriod = TimeSpan.Zero };
         }
 
         protected async Task ActivateSubscriptionAsync(string id)

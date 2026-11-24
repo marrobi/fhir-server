@@ -108,6 +108,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Rest\RequiresSubscriptionsAttribute.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Rest\Subscriptions\ReceivedNotification.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Rest\Subscriptions\StartupWithSubscriptions.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Rest\Subscriptions\SubscriptionsDisabledTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Rest\Subscriptions\SubscriptionsTestFixture.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Rest\Subscriptions\SubscriptionTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Rest\Subscriptions\WebhookReceiver.cs" />

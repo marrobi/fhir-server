@@ -70,16 +70,6 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
             return await _reader.Store.GetResourceChangeDataIdBeforeAsync(before, cancellationToken);
         }
 
-        public Task<DateTimeOffset?> GetPositionTimeAsync(long position, CancellationToken cancellationToken)
-        {
-            return _reader.Store.GetResourceChangeDataTimestampAsync(position, cancellationToken);
-        }
-
-        public Task<long> GetPositionBeforeAsync(DateTimeOffset time, CancellationToken cancellationToken)
-        {
-            return _reader.Store.GetResourceChangeDataIdBeforeAsync(time.UtcDateTime, cancellationToken);
-        }
-
         public async Task<TransactionEventPage> ReadAsync(long position, int maxPositions, Func<string, bool> isCovered, CancellationToken cancellationToken)
         {
             short pageSize = (short)Math.Clamp(maxPositions, 1, short.MaxValue);

@@ -65,6 +65,7 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest
                 configuration["FhirServer:Subscriptions:RegistryRefreshIntervalSeconds"] = "1";
                 configuration["FhirServer:Subscriptions:DeliveryPollingIntervalSeconds"] = "0.5";
                 configuration["FhirServer:Subscriptions:PumpPeriodSeconds"] = "0.5";
+                configuration["FhirServer:Subscriptions:TransactionReadLagSeconds"] = "0";
                 configuration["FhirServer:Subscriptions:RetryBaseDelaySeconds"] = "0.5";
                 configuration["FhirServer:Subscriptions:MaxDeliveryAttempts"] = "2";
                 configuration["FhirServer:Subscriptions:MinHeartbeatPeriodSeconds"] = "2";

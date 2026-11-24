@@ -349,6 +349,63 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
         }
 
         [Fact]
+        public async Task GivenATransactionCommittedBelowTheCursorAfterThePumpPassedIt_WhenChecked_ThenItIsReportedAsLate()
+        {
+            // Arrange: the first read records when checking starts.
+            await CreateObservationAsync("preliminary");
+            await AdvanceVisibilityAsync();
+            long position = await Sql.SqlServerFhirDataStore.StoreClient.MergeResourcesGetTransactionVisibilityAsync(CancellationToken.None);
+            TransactionsEventSource source = CreateTransactionsSource();
+            await source.ReadAsync(position, 1, null, CancellationToken.None);
+            await Task.Delay(50);
+
+            // A transaction whose id is 10 s below the cursor commits now, as after a backward clock step.
+            long late = position - 800_000_000 + 7;
+            ExecuteSql($"INSERT INTO dbo.Transactions (SurrogateIdRangeFirstValue, SurrogateIdRangeLastValue, IsCompleted, IsSuccess, IsVisible, EndDate) VALUES ({late}, {late}, 1, 1, 0, getUTCdate())");
+            await Task.Delay(50);
+
+            try
+            {
+                // Act
+                await source.ReadAsync(position, 1, null, CancellationToken.None);
+
+                // Assert
+                Metrics.Received(1).LateTransactions(1);
+            }
+            finally
+            {
+                ExecuteSql($"DELETE FROM dbo.Transactions WHERE SurrogateIdRangeFirstValue = {late}");
+            }
+        }
+
+        [Fact]
+        public async Task GivenAReadLag_WhenPumped_ThenTransactionsYoungerThanTheLagAreReadOnlyLater()
+        {
+            // Arrange
+            SubscriptionEventWatchdog pump = CreatePump("true");
+            await AdvanceVisibilityAsync();
+            await pump.PumpAsync(CancellationToken.None);
+            await ActivateSubscriptionAsync("s1");
+            string id = await CreateObservationAsync("preliminary");
+            await AdvanceVisibilityAsync();
+            long visibility = await Sql.SqlServerFhirDataStore.StoreClient.MergeResourcesGetTransactionVisibilityAsync(CancellationToken.None);
+            Configuration.TransactionReadLagSeconds = 3600;
+
+            // Act
+            await pump.PumpAsync(CancellationToken.None);
+            long? heldCursor = await Store.GetCursorAsync(CancellationToken.None);
+            Assert.Empty(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None));
+
+            Configuration.TransactionReadLagSeconds = 0;
+            await pump.PumpAsync(CancellationToken.None);
+
+            // Assert
+            Assert.True(heldCursor < visibility, $"cursor={heldCursor} visibility={visibility}");
+            SubscriptionEventRecord e = Assert.Single(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None));
+            Assert.Equal(id, e.ResourceId);
+        }
+
+        [Fact]
         public async Task GivenASubscriptionActivatedBeforeThePumpFirstRuns_WhenPumped_ThenChangesAfterTheActivationAreMatched()
         {
             // Arrange: activation happens before the pump has a cursor, and a change commits before the pump's first run.

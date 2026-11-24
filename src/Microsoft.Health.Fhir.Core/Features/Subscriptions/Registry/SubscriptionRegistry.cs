@@ -217,7 +217,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry
                 }
             }
 
-            return new RegisteredSubscription { Id = info.Id, Info = info, Topic = topic, State = state, Grant = grant, Errors = errors };
+            return new RegisteredSubscription { Id = info.Id, Info = info, Topic = topic, State = state, Grant = grant, Errors = errors, LastUpdated = resource.LastUpdated };
         }
 
         /// <summary>

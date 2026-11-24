@@ -42,23 +42,6 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Events
         Task<long> GetStartPositionAsync(long? earliestActivationTransactionId, CancellationToken cancellationToken);
 
         /// <summary>
-        /// Returns when the change at <paramref name="position"/> was made, or null if that is not known.
-        /// </summary>
-        /// <param name="position">A position of this source.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The time.</returns>
-        Task<DateTimeOffset?> GetPositionTimeAsync(long position, CancellationToken cancellationToken);
-
-        /// <summary>
-        /// Returns a position of this source before every change made at or after <paramref name="time"/>. Used to hand over
-        /// from another source, which has processed every change up to that time.
-        /// </summary>
-        /// <param name="time">The time.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The position to start after.</returns>
-        Task<long> GetPositionBeforeAsync(DateTimeOffset time, CancellationToken cancellationToken);
-
-        /// <summary>
         /// Reads committed changes after <paramref name="position"/>, in order, with their previous versions loaded.
         /// </summary>
         /// <param name="position">The last position already processed.</param>

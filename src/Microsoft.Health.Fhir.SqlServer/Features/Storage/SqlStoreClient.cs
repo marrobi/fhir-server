@@ -220,21 +220,6 @@ SELECT R.ResourceTypeId
         }
 
         /// <summary>
-        /// Returns when a <c>ResourceChangeData</c> record was written, or null when it no longer exists.
-        /// </summary>
-        /// <param name="id">The change record id.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The timestamp.</returns>
-        internal async Task<DateTimeOffset?> GetResourceChangeDataTimestampAsync(long id, CancellationToken cancellationToken)
-        {
-            // Seeks the Id clustered index in each timestamp partition; used once when the event source changes.
-            await using var cmd = new SqlCommand("SELECT TOP 1 Timestamp FROM dbo.ResourceChangeData WHERE Id = @Id");
-            cmd.Parameters.AddWithValue("@Id", id);
-            object value = await cmd.ExecuteScalarAsync(_sqlRetryService, _logger, cancellationToken);
-            return value == null || value == DBNull.Value ? null : new DateTimeOffset(DateTime.SpecifyKind((DateTime)value, DateTimeKind.Utc));
-        }
-
-        /// <summary>
         /// Returns the highest <c>ResourceChangeData</c> id recorded before <paramref name="before"/>, or the highest id overall when
         /// <paramref name="before"/> is null; zero when there is none.
         /// </summary>
@@ -254,6 +239,36 @@ SELECT R.ResourceTypeId
 
             object value = await cmd.ExecuteScalarAsync(_sqlRetryService, _logger, cancellationToken);
             return value == null || value == DBNull.Value ? 0 : Convert.ToInt64(value, CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// Counts successful transactions with ids in (<paramref name="fromId"/>, <paramref name="toId"/>] that committed after
+        /// <paramref name="since"/> and more than <paramref name="lagIds"/> after the time their id encodes, and were never made visible
+        /// because the visibility watermark had already passed them.
+        /// </summary>
+        /// <param name="fromId">The exclusive lower id bound.</param>
+        /// <param name="toId">The inclusive upper id bound.</param>
+        /// <param name="lagIds">The tolerated commit delay, in id units.</param>
+        /// <param name="since">The exclusive lower bound on commit time, or null to count nothing.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>The count, and the database time up to which commits were counted.</returns>
+        internal async Task<(int Count, DateTime Until)> GetLateTransactionCountAsync(long fromId, long toId, long lagIds, DateTime? since, CancellationToken cancellationToken)
+        {
+            // Seeks the clustered primary key on the id range.
+            await using var cmd = new SqlCommand(@"
+DECLARE @Until datetime = getUTCdate()
+SELECT count(*), @Until
+  FROM dbo.Transactions
+  WHERE SurrogateIdRangeFirstValue > @FromId AND SurrogateIdRangeFirstValue <= @ToId
+    AND IsCompleted = 1 AND IsSuccess = 1 AND IsVisible = 0
+    AND EndDate > @Since AND EndDate <= @Until
+    AND datediff_big(millisecond, '0001-01-01', EndDate) * 80000 > SurrogateIdRangeFirstValue + @LagIds");
+            cmd.Parameters.Add(new SqlParameter("@FromId", SqlDbType.BigInt) { Value = fromId });
+            cmd.Parameters.Add(new SqlParameter("@ToId", SqlDbType.BigInt) { Value = toId });
+            cmd.Parameters.Add(new SqlParameter("@LagIds", SqlDbType.BigInt) { Value = lagIds });
+            cmd.Parameters.Add(new SqlParameter("@Since", SqlDbType.DateTime) { Value = since.HasValue ? since.Value : DBNull.Value });
+            IReadOnlyList<(int, DateTime)> rows = await cmd.ExecuteReaderAsync(_sqlRetryService, reader => (reader.GetInt32(0), reader.GetDateTime(1)), _logger, cancellationToken);
+            return rows[0];
         }
 
         /// <summary>

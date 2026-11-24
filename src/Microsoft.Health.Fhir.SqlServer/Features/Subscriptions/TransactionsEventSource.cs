@@ -10,10 +10,14 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using EnsureThat;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.Health.Fhir.Core.Configs;
+using Microsoft.Health.Fhir.Core.Extensions;
 using Microsoft.Health.Fhir.Core.Features.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Events;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching;
+using Microsoft.Health.Fhir.Core.Logging.Metrics;
 using Microsoft.Health.Fhir.SqlServer.Features.Storage;
 
 namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
@@ -24,16 +28,28 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
     /// </summary>
     internal sealed class TransactionsEventSource : ITransactionEventSource
     {
+        private static readonly TimeSpan LateCheckWindow = TimeSpan.FromHours(1);
+
         private readonly SqlResourceChangeReader _reader;
+        private readonly SubscriptionsConfiguration _configuration;
+        private readonly ILogger<TransactionsEventSource> _logger;
+        private readonly ISubscriptionMetricHandler _metrics;
         private readonly object _sync = new();
         private Queue<long> _fetched = new();
+        private DateTime? _lateCheckedUntil;
+        private DateTimeOffset _nextLateCheck;
 
-        public TransactionsEventSource(SqlResourceChangeReader reader)
+        public TransactionsEventSource(SqlResourceChangeReader reader, IOptions<SubscriptionsConfiguration> configuration, ILogger<TransactionsEventSource> logger, ISubscriptionMetricHandler metrics = null)
         {
             _reader = EnsureArg.IsNotNull(reader, nameof(reader));
+            _configuration = EnsureArg.IsNotNull(configuration?.Value, nameof(configuration));
+            _logger = EnsureArg.IsNotNull(logger, nameof(logger));
+            _metrics = metrics;
         }
 
         public SubscriptionEventSource Kind => SubscriptionEventSource.Transactions;
+
+        internal TimeSpan LateCheckPeriod { get; init; } = TimeSpan.FromMinutes(1);
 
         public string CursorId => SqlServerSubscriptionStore.CursorId;
 
@@ -45,19 +61,10 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
             return earliestActivationTransactionId.HasValue ? Math.Min(visibility, earliestActivationTransactionId.Value) : visibility;
         }
 
-        public Task<DateTimeOffset?> GetPositionTimeAsync(long position, CancellationToken cancellationToken)
-        {
-            // Transaction ids are surrogate ids, which encode when the transaction began.
-            return Task.FromResult<DateTimeOffset?>(position > 0 ? position.ToLastUpdated() : null);
-        }
-
-        public Task<long> GetPositionBeforeAsync(DateTimeOffset time, CancellationToken cancellationToken)
-        {
-            return Task.FromResult(time.ToSurrogateId());
-        }
-
         public async Task<TransactionEventPage> ReadAsync(long position, int maxPositions, Func<string, bool> isCovered, CancellationToken cancellationToken)
         {
+            await CheckLateTransactionsAsync(position, cancellationToken);
+
             List<long> transactionIds = await NextTransactionsAsync(position, Math.Max(1, maxPositions), cancellationToken);
             if (transactionIds.Count == 0)
             {
@@ -103,6 +110,29 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
             };
         }
 
+        /// <summary>
+        /// Reports transactions that committed below the cursor after the pump passed them, which happens when the SQL clock steps
+        /// back by more than <see cref="SubscriptionsConfiguration.TransactionReadLagSeconds"/>. Their changes did not notify.
+        /// </summary>
+        private async Task CheckLateTransactionsAsync(long position, CancellationToken cancellationToken)
+        {
+            if (Clock.UtcNow < _nextLateCheck)
+            {
+                return;
+            }
+
+            _nextLateCheck = Clock.UtcNow + LateCheckPeriod;
+            long lagIds = new DateTimeOffset(DateTime.MinValue.AddSeconds(Math.Max(0, _configuration.TransactionReadLagSeconds)), TimeSpan.Zero).ToSurrogateId();
+            long fromId = _lateCheckedUntil.HasValue ? new DateTimeOffset(_lateCheckedUntil.Value - LateCheckWindow, TimeSpan.Zero).ToSurrogateId() : position;
+            (int count, DateTime until) = await _reader.Store.GetLateTransactionCountAsync(fromId, position, lagIds, _lateCheckedUntil, cancellationToken);
+            _lateCheckedUntil = until;
+            if (count > 0)
+            {
+                _logger.LogWarning("Subscription event pump: {Count} transactions committed after the pump had passed them, so their changes did not notify. Increase TransactionReadLagSeconds if this recurs.", count);
+                _metrics?.LateTransactions(count);
+            }
+        }
+
         private async Task<List<long>> NextTransactionsAsync(long position, int maxPositions, CancellationToken cancellationToken)
         {
             lock (_sync)
@@ -116,15 +146,20 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
 
             if (_fetched.Count == 0)
             {
-                long visibility = await _reader.Store.MergeResourcesGetTransactionVisibilityAsync(cancellationToken);
-                if (position >= visibility)
+                long end = await _reader.Store.MergeResourcesGetTransactionVisibilityAsync(cancellationToken);
+                if (_configuration.TransactionReadLagSeconds > 0)
+                {
+                    end = Math.Min(end, Clock.UtcNow.AddSeconds(-_configuration.TransactionReadLagSeconds).ToSurrogateId());
+                }
+
+                if (position >= end)
                 {
                     return [];
                 }
 
                 // GetTransactions returns at most 10,000 transactions; keep them for the following pages.
                 IReadOnlyList<(long TransactionId, DateTime? VisibleDate, DateTime? InvisibleHistoryRemovedDate)> transactions =
-                    await _reader.Store.GetTransactionsAsync(position, visibility, cancellationToken);
+                    await _reader.Store.GetTransactionsAsync(position, end, cancellationToken);
                 lock (_sync)
                 {
                     _fetched = new Queue<long>(transactions.Select(t => t.TransactionId).OrderBy(t => t));

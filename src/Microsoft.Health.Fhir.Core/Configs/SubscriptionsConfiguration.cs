@@ -89,6 +89,20 @@ namespace Microsoft.Health.Fhir.Core.Configs
         public double PumpPeriodSeconds { get; set; } = 1;
 
         /// <summary>
+        /// Gets or sets how far, in seconds, the <see cref="SubscriptionEventSource.Transactions"/> source stays behind the newest transaction ids.
+        /// Transaction ids come from the SQL clock, so a write that starts after the clock steps back gets a lower id than earlier writes;
+        /// it is read only if it commits within this lag. Zero reads up to the visibility watermark.
+        /// The same margin applies before a subscription's activation, so changes made up to this long before activation can also notify.
+        /// </summary>
+        public double TransactionReadLagSeconds { get; set; } = 5;
+
+        /// <summary>
+        /// Gets or sets how long, in hours, a subscription may stay in <c>error</c> before it is set to <c>off</c> and its pending events
+        /// are discarded. Bounds the events kept for an unreachable endpoint. Zero disables the limit.
+        /// </summary>
+        public int MaxErrorHours { get; set; } = 72;
+
+        /// <summary>
         /// Gets or sets the maximum lag, in hours, by which the event pump may hold back invisible-history cleanup.
         /// </summary>
         public int MaxHistoryCleanupHoldHours { get; set; } = 24;

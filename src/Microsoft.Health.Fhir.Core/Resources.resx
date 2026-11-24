@@ -1158,6 +1158,9 @@
   <data name="SubscriptionEnded" xml:space="preserve">
     <value>The subscription reached its end time.</value>
   </data>
+  <data name="SubscriptionErrorExpired" xml:space="preserve">
+    <value>The subscription was in error for more than {0} hours, so it was turned off and its undelivered events were discarded. Set its status to requested to resume.</value>
+  </data>
   <data name="SubscriptionHandshakeFailed" xml:space="preserve">
     <value>The handshake failed: {0}</value>
   </data>

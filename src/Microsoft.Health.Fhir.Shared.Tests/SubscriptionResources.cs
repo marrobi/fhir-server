@@ -78,7 +78,7 @@ namespace Microsoft.Health.Fhir.Tests.Common
 #endif
         }
 
-        public static string Subscription(string topicUrl, string endpoint, string content = "id-only", string filter = null, string status = "requested", string id = null, int heartbeat = 120, DateTimeOffset? end = null)
+        public static string Subscription(string topicUrl, string endpoint, string content = "id-only", string filter = null, string status = "requested", string id = null, int heartbeat = 120, DateTimeOffset? end = null, string contentType = "application/fhir+json")
         {
 #if R5
             var subscription = new JObject
@@ -91,7 +91,7 @@ namespace Microsoft.Health.Fhir.Tests.Common
                 ["parameter"] = new JArray(new JObject { ["name"] = "Authorization", ["value"] = "Bearer secret" }),
                 ["heartbeatPeriod"] = heartbeat,
                 ["timeout"] = 30,
-                ["contentType"] = "application/fhir+json",
+                ["contentType"] = contentType,
                 ["maxCount"] = 10,
             };
 
@@ -118,7 +118,7 @@ namespace Microsoft.Health.Fhir.Tests.Common
                     new JObject { ["url"] = SubscriptionsBackport.MaxCount, ["valuePositiveInt"] = 10 }),
                 ["type"] = "rest-hook",
                 ["endpoint"] = endpoint,
-                ["payload"] = "application/fhir+json",
+                ["payload"] = contentType,
                 ["header"] = new JArray("Authorization: Bearer secret"),
             };
 

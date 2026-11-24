@@ -2943,6 +2943,15 @@ namespace Microsoft.Health.Fhir.Core {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to The subscription was in error for more than {0} hours, so it was turned off and its undelivered events were discarded. Set its status to requested to resume..
+        /// </summary>
+        internal static string SubscriptionErrorExpired {
+            get {
+                return ResourceManager.GetString("SubscriptionErrorExpired", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to The handshake failed: {0}.
         /// </summary>
         internal static string SubscriptionHandshakeFailed {
