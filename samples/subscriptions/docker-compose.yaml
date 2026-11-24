@@ -7,6 +7,8 @@ services:
       dockerfile: ./build/docker/Dockerfile
       args:
         FHIR_VERSION: ${FHIR_VERSION:-R4}
+        # The Dockerfile passes this to -p:Version, which must not be empty.
+        ASSEMBLY_VER: ${ASSEMBLY_VER:-1.0.0}
     restart: on-failure
     environment:
       FHIRServer__Security__Enabled: "false"
