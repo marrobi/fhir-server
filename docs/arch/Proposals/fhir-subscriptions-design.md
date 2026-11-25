@@ -216,7 +216,7 @@ Filters and criteria are evaluated **in memory** against the changed resource an
 | `query-status` through `$status` (instance and type level) | **SHALL** | ✅ v1 |
 | `query-event` through `$events` (replay past events) | MAY | ⏳ Later. Limited to the event retention window. |
 | `eventsSinceSubscriptionStart` and `notificationEvent.eventNumber` | Core | ✅ v1. Numbers are assigned after the access check (3.7). `Unevaluable` events use a number but are not sent. Lost source rows and changes the subscriber cannot read get no number (decision 3). |
-| `notificationEvent.focus`. It is absent for `empty`. For `id-only`, each entry has `fullUrl` and `request`. For `full-resource`, each entry has the resource, or `request` and `response` when the resource cannot be included. | Core / Backport | ✅ v1. Checked by profile validation in the release gate. |
+| `notificationEvent.focus`. It is absent for `empty`. For `id-only`, each entry has `fullUrl` and `request`. For `full-resource`, each entry has the resource, or `request` and `response` when the resource cannot be included. | Core / Backport | ✅ v1. Checked by profile validation in the release gate. Whether `focus` names the version is design decision 12. |
 | `notificationEvent.additionalContext` | Core | ⏳ Later, with `notificationShape` |
 | `SubscriptionStatus.error` reporting | Core | ✅ v1 |
 | Error handling: retries with back-off, then `error`; `active` again when a notification succeeds; optionally `off` after persistent failure | SHOULD | ✅ v1. In `error`, the server keeps sending recovery handshakes and returns the subscription to `active` when one succeeds. It never switches it `off` unless `MaxErrorHours` is set. The client can also reset it to `requested`. See design decision 7. |
@@ -404,6 +404,12 @@ Each decision gives the rule, the reason, and its limits.
     - **Rule:** `FhirServer:Subscriptions:Enabled` defaults to `false` and is independent of `SupportsResourceChangeCapture`.
     - **Rule:** the feature needs the next SQL schema version, which is currently 123.
     - **Limit:** subscription and topic writes add validation and grant handling. Other writes are unchanged.
+12. **Which version a notification names.** To confirm before PR 5 finalises the payloads.
+    - **Today:** `focus` is `Type/id`, as HAPI FHIR sends it, although every event records the exact version. Only `full-resource` payloads show the version, in the resource's `meta.versionId`.
+    - **Problem:** with `id-only`, a client cannot tell which version an event is about. If a resource changes twice before a notification is sent, both events name the same resource, and a read returns only the latest version.
+    - **Recommendation:** make `focus` a versioned reference, `Type/id/_history/vid`, at every payload level that includes it. `fullUrl` and `request.url` stay unversioned, as the Bundle rules require. A client reads the exact version with a version read, or ignores the version.
+    - **Risk:** a client that compares `focus` with `fullUrl`, or accepts only `Type/id`, must remove the `/_history/vid` suffix. Check this with the HAPI FHIR client and the Backport IG examples before deciding.
+    - **Limit:** a version read needs history. For `no-version` types the version may already be gone (rule 3).
 
 ### 6.4 Availability and failure behaviour
 
@@ -415,6 +421,7 @@ Each decision gives the rule, the reason, and its limits.
 | Change source setting changed after first use | The worker stops without moving the cursor. Restoring the original setting resumes matching, but only for records and versions that are still kept. Switching sources on an existing database is not supported. |
 | Grant saved after the resource | An API write commits the `Subscription` before saving its grant. Background validation allows one minute for the grant to appear, and does not activate the subscription during that time. Server status updates do not need a new grant. |
 | Endpoint address checks | Rest-hook requests do not use a proxy, so connection-time address checks apply to the endpoint itself. |
+| Advertised profiles | Every profile the CapabilityStatement advertises for subscriptions ships with the server: on R4 and R4B the Backport IG 1.1.0 `backport-subscription` profile and the extensions it uses, and on R4 the `Basic` topic profile. `$validate` and profile validation on write resolve them without anyone uploading them, so the IG's narrative does not need to pass the server's narrative checks. |
 
 ### 6.5 Settings
 
@@ -463,6 +470,7 @@ v1 ships only when all of these pass:
   4. Send one authorized event.
   5. Repeat with the worker stopped mid-page: readable changes replay without duplicate event numbers.
   6. Repeat with access revoked between matching and sending: the event is not sent.
+- **Profiles:** every profile the CapabilityStatement advertises resolves on the server, and a `Subscription` that conforms to it passes validation.
 - **Payloads:** E2E tests against a local webhook receiver for R4 Backport, R4B and R5. The first entry is `Parameters` or `SubscriptionStatus` as expected. Results are validated against the Backport and R5 profiles for every payload level: `empty` has no focus, and `id-only` entries have `fullUrl` and `request`.
 - **Handshake and recovery:** success leads to `active`. Repeated failure leads to `error`, and a later successful recovery handshake returns the subscription to `active` and delivers the waiting events in order, without client action.
 - **Monitoring:** alerts on `Subscriptions.InError` and `Subscriptions.OldestPendingEventAge` are defined, and the clinical-safety hazard log covers unreachable webhooks and the gap before activation.
