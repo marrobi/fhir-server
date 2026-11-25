@@ -1,4 +1,4 @@
-// -------------------------------------------------------------------------------------------------
+﻿// -------------------------------------------------------------------------------------------------
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
 // -------------------------------------------------------------------------------------------------
@@ -69,6 +69,30 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
 
             Assert.Equal(Bundle.HTTPVerb.POST, bundle.Entry[1].Request.Method);
             Assert.Equal(Bundle.HTTPVerb.PUT, bundle.Entry[2].Request.Method);
+        }
+
+        [Fact]
+        public void GivenEvents_WhenBuilt_ThenEachEntryResponseNamesTheVersionAndWhenItChanged()
+        {
+            // Arrange
+            SubscriptionNotificationEvent[] events = Events(2);
+            events = [events[0], events[1], new SubscriptionNotificationEvent { EventNumber = 9, Timestamp = DateTimeOffset.UtcNow, ResourceType = "Encounter", ResourceId = "e3", ResourceVersion = 4, Interaction = SubscriptionInteraction.Delete }];
+
+            // Act
+            Bundle bundle = Build(SubscriptionContentLevel.IdOnly, events);
+
+            // Assert
+            for (int i = 0; i < events.Length; i++)
+            {
+                Bundle.ResponseComponent response = bundle.Entry[i + 1].Response;
+                Assert.Equal($"W/\"{events[i].ResourceVersion}\"", response.Etag);
+                Assert.Equal(events[i].Timestamp.ToUnixTimeMilliseconds(), response.LastModified.Value.ToUnixTimeMilliseconds());
+            }
+
+            Assert.Equal("https://fhir.example/Encounter/e1/_history/1", bundle.Entry[1].Response.Location);
+            Assert.Equal("https://fhir.example/Encounter/e2/_history/2", bundle.Entry[2].Response.Location);
+            Assert.Null(bundle.Entry[3].Response.Location);
+            Assert.Equal("https://fhir.example/Encounter/e1", bundle.Entry[1].FullUrl);
         }
 
         [Fact]

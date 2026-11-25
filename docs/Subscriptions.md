@@ -106,6 +106,18 @@ The capacity defaults (`MaxActiveSubscriptions`, `PumpPeriodSeconds`, `PumpTrans
 
 The product group must confirm the defaults for `EventSource`, `NotifyHistoricalVersions`, `UnversionedResourceTypes` and `MaxLifetimeDays` before accepting [ADR-2611](arch/adr-2611-fhir-subscriptions.md). These are settings, but `EventSource` cannot change after first use of a database.
 
+## Notification payloads
+
+Each notification event names one version of one resource. `focus` and each entry's `fullUrl` are version-independent URLs, as in the Backport IG examples and as HAPI FHIR sends them. Each entry's `response` gives the exact version:
+
+| Element | Value |
+|---|---|
+| `response.location` | The version's URL, for example `https://fhir.example/Encounter/123/_history/2`. Read it directly to get that version. Absent for deletes, because a deleted version cannot be read. |
+| `response.etag` | The version, for example `W/"2"`. |
+| `response.lastModified` | When the version was written. It equals the event's `timestamp`, so a client can match each event to its entry. |
+
+Entries follow the events in event-number order. With `maxCount` above 1, one notification can hold several versions of the same resource. On R4 and R4B each has its own entry. On R5, an `id-only` notification has one entry per resource, because the R5 Bundle rules do not allow entries with the same `fullUrl` and no resource; use `full-resource`, where each resource carries `meta.versionId`, or `maxCount` 1 if you need every version.
+
 ## Built-in profiles
 
 On R4 and R4B the CapabilityStatement lists the Backport IG 1.1.0 profile `http://hl7.org/fhir/uv/subscriptions-backport/StructureDefinition/backport-subscription` in `Subscription.supportedProfile`. The server ships that profile, the Backport extensions it uses and the payload content value set, so `$validate` and profile validation on write resolve it without anything being uploaded. Do not upload them yourself.

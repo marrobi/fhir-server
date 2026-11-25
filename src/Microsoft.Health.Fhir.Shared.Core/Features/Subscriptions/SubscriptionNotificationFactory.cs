@@ -99,6 +99,14 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
                             _ => "200",
                         },
                         Etag = $"W/\"{notificationEvent.ResourceVersion}\"",
+
+                        // The version's lastUpdated, which is the event timestamp, so a client can match each event to its entry.
+                        LastModified = notificationEvent.Timestamp,
+
+                        // A deleted version cannot be read (410), so only creates and updates get a location.
+                        Location = notificationEvent.Interaction == SubscriptionInteraction.Delete
+                            ? null
+                            : Absolute(request.BaseUri, $"{relative}/_history/{notificationEvent.ResourceVersion.ToString(CultureInfo.InvariantCulture)}"),
                     },
                 });
             }
