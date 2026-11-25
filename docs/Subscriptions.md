@@ -106,6 +106,10 @@ The capacity defaults (`MaxActiveSubscriptions`, `PumpPeriodSeconds`, `PumpTrans
 
 The product group must confirm the defaults for `EventSource`, `NotifyHistoricalVersions`, `UnversionedResourceTypes` and `MaxLifetimeDays` before accepting [ADR-2611](arch/adr-2611-fhir-subscriptions.md). These are settings, but `EventSource` cannot change after first use of a database.
 
+## Built-in profiles
+
+On R4 and R4B the CapabilityStatement lists the Backport IG 1.1.0 profile `http://hl7.org/fhir/uv/subscriptions-backport/StructureDefinition/backport-subscription` in `Subscription.supportedProfile`. The server ships that profile, the Backport extensions it uses and the payload content value set, so `$validate` and profile validation on write resolve it without anything being uploaded. Do not upload them yourself.
+
 ## R4 topic profile
 
 R4 has no `SubscriptionTopic` resource type. This server uses `Basic` with code `http://hl7.org/fhir/fhir-types#SubscriptionTopic` and the StructureDefinition `http://fhir.microsoft.com/StructureDefinition/subscription-topic-basic` ([source](../src/Microsoft.Health.Fhir.R4.Core/Features/Subscriptions/StructureDefinition-subscription-topic-basic.json)). This is a server-specific extension, not a Backport IG requirement. The layout follows HAPI FHIR, but compatibility with every server is not guaranteed:

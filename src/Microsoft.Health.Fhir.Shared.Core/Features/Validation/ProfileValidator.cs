@@ -55,7 +55,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Validation
                     cacheDuration,
                     _maxExpansionSize);
 
-                _resolver = new MultiResolver(new CachedResolver(ZipSource.CreateValidationSource(), cacheDuration), SubscriptionTopicProfile.CreateResolver(), profilesResolver);
+                _resolver = new MultiResolver(new CachedResolver(ZipSource.CreateValidationSource(), cacheDuration), SubscriptionTopicProfile.CreateResolver(), SubscriptionsBackportProfiles.CreateResolver(), profilesResolver);
             }
             catch (Exception)
             {

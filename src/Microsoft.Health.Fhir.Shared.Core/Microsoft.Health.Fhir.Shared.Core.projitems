@@ -43,6 +43,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionResourceLoader.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionStatusWriter.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionTopicProfile.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionsBackportProfiles.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Resources\BaseResourceHandler.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Resources\ConditionalResourceHandler.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Resources\Create\ConditionalCreateResourceHandler.cs" />

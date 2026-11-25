@@ -38,6 +38,8 @@
   <ItemGroup>
     <EmbeddedResource Include="Features\Subscriptions\StructureDefinition-subscription-topic-basic.json" LogicalName="subscription-topic-basic.json" />
     <EmbeddedResource Include="Features\Subscriptions\StructureDefinition-extension-SubscriptionTopic.status.json" LogicalName="subscription-topic-status-extension.json" />
+    <!-- The Subscriptions R5 Backport IG 1.1.0 profile the CapabilityStatement advertises, with the extensions and terminology it uses. -->
+    <EmbeddedResource Include="Features\Subscriptions\Backport\*.json" LogicalName="subscriptions-backport/%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>
