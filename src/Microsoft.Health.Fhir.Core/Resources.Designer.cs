@@ -2916,6 +2916,15 @@ namespace Microsoft.Health.Fhir.Core {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to The filter for parameter &#x27;{0}&#x27; has both a modifier and a comparator; a subscription filter may have only one..
+        /// </summary>
+        internal static string SubscriptionFilterModifierAndComparator {
+            get {
+                return ResourceManager.GetString("SubscriptionFilterModifierAndComparator", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to The criteria &#x27;{0}&#x27; does not apply to resource type &#x27;{1}&#x27;..
         /// </summary>
         internal static string SubscriptionTopicCriteriaTypeMismatch {

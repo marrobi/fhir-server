@@ -3,6 +3,7 @@
 // Licensed under the MIT License (MIT). See LICENSE in the repo root for license information.
 // -------------------------------------------------------------------------------------------------
 
+using System;
 using System.Collections.Generic;
 using Microsoft.Health.Fhir.Core.Configs;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions;
@@ -185,6 +186,18 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             SubscriptionInfo subscription = With(filters: [new SubscriptionFilter { ResourceType = "Encounter", FilterParameter = "status", Value = "ge-custom" }]);
 
             Assert.Empty(_validator.ValidateSubscription(subscription, topic));
+        }
+
+        [Fact]
+        public void GivenAFilterWithAModifierAndAComparator_WhenValidated_ThenItIsRejected()
+        {
+            // Both are allowed by the topic, so only the R5 invariant scr-1 rejects the filter.
+            SubscriptionTopicInfo topic = Copy(ValidTopic(), canFilterBy: [new TopicCanFilterBy { Resource = "Encounter", FilterParameter = "date", Modifiers = ["missing"], Comparators = ["gt"] }]);
+            SubscriptionInfo subscription = With(filters: [new SubscriptionFilter { ResourceType = "Encounter", FilterParameter = "date", Modifier = "missing", Comparator = "gt", Value = "2026-01-01" }]);
+
+            IReadOnlyList<string> errors = _validator.ValidateSubscription(subscription, topic);
+
+            Assert.Contains(errors, e => e.Contains("both a modifier and a comparator", StringComparison.Ordinal));
         }
 
         private static SubscriptionTopicInfo ValidTopic() => new()

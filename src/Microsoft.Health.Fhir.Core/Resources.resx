@@ -1149,6 +1149,9 @@
   <data name="SubscriptionFilterComparatorNotAllowed" xml:space="preserve">
     <value>The comparator '{0}' is not allowed for filter parameter '{1}'.</value>
   </data>
+  <data name="SubscriptionFilterModifierAndComparator" xml:space="preserve">
+    <value>The filter for parameter '{0}' has both a modifier and a comparator; a subscription filter may have only one.</value>
+  </data>
   <data name="SubscriptionTopicCriteriaTypeMismatch" xml:space="preserve">
     <value>The criteria '{0}' does not apply to resource type '{1}'.</value>
   </data>

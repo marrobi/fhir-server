@@ -254,6 +254,13 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
                     continue;
                 }
 
+                // R5 invariant scr-1: a filter may have a modifier or a comparator, not both.
+                if (!string.IsNullOrEmpty(filter.Modifier) && !string.IsNullOrEmpty(filter.Comparator))
+                {
+                    errors.Add(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionFilterModifierAndComparator, filter.FilterParameter));
+                    continue;
+                }
+
                 List<TopicCanFilterBy> allowed = topic.CanFilterBy
                     .Where(c => string.Equals(c.FilterParameter, filter.FilterParameter, StringComparison.Ordinal) &&
                         (string.IsNullOrEmpty(c.Resource) || filter.ResourceType == null || string.Equals(SubscriptionMatcher.GetTypeName(c.Resource), filter.ResourceType, StringComparison.Ordinal)))
