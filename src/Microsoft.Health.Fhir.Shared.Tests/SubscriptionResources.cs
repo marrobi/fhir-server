@@ -17,71 +17,112 @@ namespace Microsoft.Health.Fhir.Tests.Common
     /// </summary>
     public static class SubscriptionResources
     {
-        public static string Topic(string url, string id = "t1")
+        public static string Topic(string url, string id = "t1") =>
+            Topic(
+                url,
+                id,
+                [new TopicTrigger("Encounter", ["create", "update"]) { Previous = "status:not=cancelled", ResultForCreate = "test-passes", Current = "status=cancelled", RequireBoth = true }],
+                [("Encounter", "subject")]);
+
+        public static string Topic(string url, string id, IReadOnlyList<TopicTrigger> triggers, IReadOnlyList<(string Resource, string Parameter)> canFilterBy)
         {
 #if R4 && !R4B
             // HAPI FHIR's layout: metadata on the 5.0 prefix, status as a modifier extension, backbone elements on the 4.3 prefix.
             const string P = SubscriptionsBackport.TopicExtensionPrefix;
             const string B = SubscriptionsBackport.TopicBackboneExtensionPrefix;
+            var extensions = new JArray(Ext(P + "url", "valueUri", url));
+            foreach (TopicTrigger trigger in triggers)
+            {
+                var parts = new JArray(Ext("resource", "valueUri", trigger.Resource));
+                foreach (string interaction in trigger.Interactions)
+                {
+                    parts.Add(Ext("supportedInteraction", "valueCode", interaction));
+                }
+
+                if (trigger.HasQueryCriteria)
+                {
+                    var criteria = new JArray();
+                    AddIfSet(criteria, "previous", "valueString", trigger.Previous);
+                    AddIfSet(criteria, "resultForCreate", "valueCode", trigger.ResultForCreate);
+                    AddIfSet(criteria, "current", "valueString", trigger.Current);
+                    AddIfSet(criteria, "resultForDelete", "valueCode", trigger.ResultForDelete);
+                    if (trigger.RequireBoth.HasValue)
+                    {
+                        criteria.Add(new JObject { ["url"] = "requireBoth", ["valueBoolean"] = trigger.RequireBoth.Value });
+                    }
+
+                    parts.Add(new JObject { ["url"] = "queryCriteria", ["extension"] = criteria });
+                }
+
+                AddIfSet(parts, "fhirPathCriteria", "valueString", trigger.FhirPathCriteria);
+                extensions.Add(new JObject { ["url"] = B + "resourceTrigger", ["extension"] = parts });
+            }
+
+            foreach ((string resource, string parameter) in canFilterBy)
+            {
+                extensions.Add(new JObject { ["url"] = B + "canFilterBy", ["extension"] = new JArray(Ext("resource", "valueUri", resource), Ext("filterParameter", "valueString", parameter)) });
+            }
+
             var basic = new JObject
             {
                 ["resourceType"] = "Basic",
                 ["id"] = id,
                 ["modifierExtension"] = new JArray(Ext(P + "status", "valueCode", "active")),
                 ["code"] = new JObject { ["coding"] = new JArray(new JObject { ["system"] = SubscriptionsBackport.FhirTypesSystem, ["code"] = "SubscriptionTopic" }) },
-                ["extension"] = new JArray(
-                    Ext(P + "url", "valueUri", url),
-                    new JObject
-                    {
-                        ["url"] = B + "resourceTrigger",
-                        ["extension"] = new JArray(
-                            Ext("resource", "valueUri", "Encounter"),
-                            Ext("supportedInteraction", "valueCode", "create"),
-                            Ext("supportedInteraction", "valueCode", "update"),
-                            new JObject
-                            {
-                                ["url"] = "queryCriteria",
-                                ["extension"] = new JArray(
-                                    Ext("previous", "valueString", "status:not=cancelled"),
-                                    Ext("resultForCreate", "valueCode", "test-passes"),
-                                    Ext("current", "valueString", "status=cancelled"),
-                                    new JObject { ["url"] = "requireBoth", ["valueBoolean"] = true }),
-                            }),
-                    },
-                    new JObject
-                    {
-                        ["url"] = B + "canFilterBy",
-                        ["extension"] = new JArray(Ext("resource", "valueUri", "Encounter"), Ext("filterParameter", "valueString", "subject")),
-                    }),
+                ["extension"] = extensions,
             };
             return basic.ToString();
 #else
+            var resourceTriggers = new JArray();
+            foreach (TopicTrigger trigger in triggers)
+            {
+                var resourceTrigger = new JObject { ["resource"] = trigger.Resource, ["supportedInteraction"] = new JArray(trigger.Interactions) };
+                if (trigger.HasQueryCriteria)
+                {
+                    var criteria = new JObject();
+                    SetIfSet(criteria, "previous", trigger.Previous);
+                    SetIfSet(criteria, "resultForCreate", trigger.ResultForCreate);
+                    SetIfSet(criteria, "current", trigger.Current);
+                    SetIfSet(criteria, "resultForDelete", trigger.ResultForDelete);
+                    if (trigger.RequireBoth.HasValue)
+                    {
+                        criteria["requireBoth"] = trigger.RequireBoth.Value;
+                    }
+
+                    resourceTrigger["queryCriteria"] = criteria;
+                }
+
+                SetIfSet(resourceTrigger, "fhirPathCriteria", trigger.FhirPathCriteria);
+                resourceTriggers.Add(resourceTrigger);
+            }
+
+            var filters = new JArray();
+            foreach ((string resource, string parameter) in canFilterBy)
+            {
+                filters.Add(new JObject { ["resource"] = resource, ["filterParameter"] = parameter });
+            }
+
             var topic = new JObject
             {
                 ["resourceType"] = "SubscriptionTopic",
                 ["id"] = id,
                 ["url"] = url,
                 ["status"] = "active",
-                ["resourceTrigger"] = new JArray(new JObject
-                {
-                    ["resource"] = "Encounter",
-                    ["supportedInteraction"] = new JArray("create", "update"),
-                    ["queryCriteria"] = new JObject
-                    {
-                        ["previous"] = "status:not=cancelled",
-                        ["resultForCreate"] = "test-passes",
-                        ["current"] = "status=cancelled",
-                        ["requireBoth"] = true,
-                    },
-                }),
-                ["canFilterBy"] = new JArray(new JObject { ["resource"] = "Encounter", ["filterParameter"] = "subject" }),
+                ["resourceTrigger"] = resourceTriggers,
+                ["canFilterBy"] = filters,
             };
             return topic.ToString();
 #endif
         }
 
-        public static string Subscription(string topicUrl, string endpoint, string content = "id-only", string filter = null, string status = "requested", string id = null, int heartbeat = 120, DateTimeOffset? end = null, string contentType = "application/fhir+json")
+        public static string Subscription(string topicUrl, string endpoint, string content = "id-only", string filter = null, string status = "requested", string id = null, int heartbeat = 120, DateTimeOffset? end = null, string contentType = "application/fhir+json", IReadOnlyList<string> filters = null)
         {
+            var allFilters = new List<string>(filters ?? []);
+            if (filter != null)
+            {
+                allFilters.Insert(0, filter);
+            }
+
 #if R5
             var subscription = new JObject
             {
@@ -102,14 +143,19 @@ namespace Microsoft.Health.Fhir.Tests.Common
                 subscription["content"] = content;
             }
 
-            if (filter != null)
+            if (allFilters.Count > 0)
             {
-                IReadOnlyList<KeyValuePair<string, string>> parameters = SubscriptionQueryParser.Parse(filter, out string type);
-                subscription["filterBy"] = new JArray();
-                foreach (KeyValuePair<string, string> parameter in parameters)
+                var filterBy = new JArray();
+                foreach (string criteria in allFilters)
                 {
-                    ((JArray)subscription["filterBy"]).Add(new JObject { ["resourceType"] = type, ["filterParameter"] = parameter.Key, ["value"] = parameter.Value });
+                    IReadOnlyList<KeyValuePair<string, string>> parameters = SubscriptionQueryParser.Parse(criteria, out string type);
+                    foreach (KeyValuePair<string, string> parameter in parameters)
+                    {
+                        filterBy.Add(new JObject { ["resourceType"] = type, ["filterParameter"] = parameter.Key, ["value"] = parameter.Value });
+                    }
                 }
+
+                subscription["filterBy"] = filterBy;
             }
 #else
             var channel = new JObject
@@ -139,9 +185,15 @@ namespace Microsoft.Health.Fhir.Tests.Common
                 ["channel"] = channel,
             };
 
-            if (filter != null)
+            if (allFilters.Count > 0)
             {
-                subscription["_criteria"] = new JObject { ["extension"] = new JArray(Ext(SubscriptionsBackport.FilterCriteria, "valueString", filter)) };
+                var criteria = new JArray();
+                foreach (string value in allFilters)
+                {
+                    criteria.Add(Ext(SubscriptionsBackport.FilterCriteria, "valueString", value));
+                }
+
+                subscription["_criteria"] = new JObject { ["extension"] = criteria };
             }
 #endif
             if (id != null)
@@ -156,5 +208,21 @@ namespace Microsoft.Health.Fhir.Tests.Common
         }
 
         private static JObject Ext(string url, string valueName, string value) => new() { ["url"] = url, [valueName] = value };
+
+        private static void AddIfSet(JArray extensions, string url, string valueName, string value)
+        {
+            if (value != null)
+            {
+                extensions.Add(Ext(url, valueName, value));
+            }
+        }
+
+        private static void SetIfSet(JObject target, string name, string value)
+        {
+            if (value != null)
+            {
+                target[name] = value;
+            }
+        }
     }
 }

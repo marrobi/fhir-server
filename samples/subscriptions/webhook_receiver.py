@@ -29,8 +29,13 @@ class Handler(BaseHTTPRequestHandler):
                 "authorization": self.headers.get("Authorization"),
                 "body": json.loads(body) if body.startswith("{") else body,
             })
+        # HAPI FHIR parses the response as a Bundle and retries the delivery when it cannot, so reply with an empty one.
+        response = b'{"resourceType":"Bundle","type":"batch-response"}'
         self.send_response(200)
+        self.send_header("Content-Type", "application/fhir+json")
+        self.send_header("Content-Length", str(len(response)))
         self.end_headers()
+        self.wfile.write(response)
 
     def do_GET(self):
         with _lock:

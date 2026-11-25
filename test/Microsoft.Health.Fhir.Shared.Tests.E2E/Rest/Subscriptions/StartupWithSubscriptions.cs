@@ -7,7 +7,9 @@ using Microsoft.Extensions.Configuration;
 
 namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
 {
+    // Isolated so the subscription registry never processes subscriptions written by servers that have the feature off.
     [RequiresSubscriptions]
+    [RequiresIsolatedDatabase]
     public class StartupWithSubscriptions : StartupBaseForCustomProviders
     {
         public StartupWithSubscriptions(IConfiguration configuration)

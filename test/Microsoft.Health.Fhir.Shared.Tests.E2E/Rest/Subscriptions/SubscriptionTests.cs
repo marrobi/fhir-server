@@ -5,10 +5,13 @@
 
 #if !Stu3
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Health.Fhir.Client;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions;
@@ -31,6 +34,7 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
     {
         private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(90);
         private static readonly TimeSpan QuietPeriod = TimeSpan.FromSeconds(6);
+        private static readonly Regex FocusPattern = new("[A-Z][A-Za-z]+/[0-9a-f]{32}", RegexOptions.Compiled);
 
         private readonly SubscriptionsTestFixture _fixture;
         private readonly HttpClient _client;
@@ -331,6 +335,138 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
         }
 
         [Fact]
+        public async Task GivenADeleteOnlyTrigger_WhenAnEncounterIsCreatedUpdatedAndDeleted_ThenOnlyTheDeleteIsNotified()
+        {
+            Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires an in-proc server with subscriptions enabled and a local receiver.");
+            string path = NewPath();
+            string patient = Guid.NewGuid().ToString("N");
+            string topicUrl = await CreateTopicAsync([new TopicTrigger("Encounter", ["delete"])], [("Encounter", "subject")]);
+            string subscriptionId = await CreateActiveSubscriptionAsync(topicUrl, path, "id-only", $"Encounter?subject=Patient/{patient}");
+            try
+            {
+                string encounter = Guid.NewGuid().ToString("N");
+                await PutEncounterAsync(encounter, patient, "planned");
+                await PutEncounterAsync(encounter, patient, "cancelled");
+                await DeleteAsync($"Encounter/{encounter}");
+
+                (int Number, string Focus)[] events = await WaitForEventsAsync(path, 1);
+
+                Assert.Equal([(1, $"Encounter/{encounter}")], events);
+                JToken entry = JObject.Parse(Webhook.For(path).Single(IsEvent).Body)["entry"].Skip(1).Single();
+                Assert.Equal("DELETE", (string)entry["request"]["method"]);
+            }
+            finally
+            {
+                await SendAsync(HttpMethod.Delete, $"Subscription/{subscriptionId}");
+            }
+        }
+
+        [Fact]
+        public async Task GivenQueryCriteriaWhereEitherTestMayPass_WhenEncountersChangeAndAreDeleted_ThenLeavingOrEnteringAStateIsNotified()
+        {
+            Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires an in-proc server with subscriptions enabled and a local receiver.");
+            string path = NewPath();
+            string patient = Guid.NewGuid().ToString("N");
+            var trigger = new TopicTrigger("Encounter", ["update", "delete"])
+            {
+                Previous = "status=in-progress",
+                Current = "status=cancelled",
+                ResultForDelete = "test-fails",
+                RequireBoth = false,
+            };
+            string topicUrl = await CreateTopicAsync([trigger], [("Encounter", "subject")]);
+            string subscriptionId = await CreateActiveSubscriptionAsync(topicUrl, path, "id-only", $"Encounter?subject=Patient/{patient}");
+            try
+            {
+                string changed = Guid.NewGuid().ToString("N");
+                await PutEncounterAsync(changed, patient, "planned");
+                await PutEncounterAsync(changed, patient, "in-progress");
+                await PutEncounterAsync(changed, patient, "unknown");
+                await PutEncounterAsync(changed, patient, "cancelled");
+                string deletedInProgress = Guid.NewGuid().ToString("N");
+                await PutEncounterAsync(deletedInProgress, patient, "in-progress");
+                await DeleteAsync($"Encounter/{deletedInProgress}");
+                string deletedPlanned = Guid.NewGuid().ToString("N");
+                await PutEncounterAsync(deletedPlanned, patient, "planned");
+                await DeleteAsync($"Encounter/{deletedPlanned}");
+
+                (int Number, string Focus)[] events = await WaitForEventsAsync(path, 3);
+
+                // Leaving in-progress passes the previous test, entering cancelled passes the current test, and a delete is judged on
+                // the deleted version because resultForDelete fails the current test.
+                Assert.Equal([(1, $"Encounter/{changed}"), (2, $"Encounter/{changed}"), (3, $"Encounter/{deletedInProgress}")], events);
+            }
+            finally
+            {
+                await SendAsync(HttpMethod.Delete, $"Subscription/{subscriptionId}");
+            }
+        }
+
+        [Fact]
+        public async Task GivenFhirPathCriteriaUsingPreviousAndCurrent_WhenEncountersChange_ThenOnlyTheTransitionIntoCancelledIsNotified()
+        {
+            Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires an in-proc server with subscriptions enabled and a local receiver.");
+            string path = NewPath();
+            string patient = Guid.NewGuid().ToString("N");
+            var trigger = new TopicTrigger("Encounter", ["create", "update"]) { FhirPathCriteria = "%previous.status != 'cancelled' and %current.status = 'cancelled'" };
+            string topicUrl = await CreateTopicAsync([trigger], [("Encounter", "subject")]);
+            string subscriptionId = await CreateActiveSubscriptionAsync(topicUrl, path, "id-only", $"Encounter?subject=Patient/{patient}");
+            try
+            {
+                await PutEncounterAsync(Guid.NewGuid().ToString("N"), patient, "cancelled");
+                string transitioned = Guid.NewGuid().ToString("N");
+                await PutEncounterAsync(transitioned, patient, "planned");
+                await PutEncounterAsync(transitioned, patient, "cancelled");
+                await PutEncounterAsync(transitioned, patient, "cancelled");
+
+                (int Number, string Focus)[] events = await WaitForEventsAsync(path, 1);
+
+                Assert.Equal([(1, $"Encounter/{transitioned}")], events);
+            }
+            finally
+            {
+                await SendAsync(HttpMethod.Delete, $"Subscription/{subscriptionId}");
+            }
+        }
+
+        [Fact]
+        public async Task GivenTwoTriggersWithAFilterPerResourceType_WhenEncountersAndObservationsAreCreated_ThenOnlyMatchingResourcesForThePatientAreNotified()
+        {
+            Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires an in-proc server with subscriptions enabled and a local receiver.");
+            string path = NewPath();
+            string patient = Guid.NewGuid().ToString("N");
+            string otherPatient = Guid.NewGuid().ToString("N");
+            string topicUrl = await CreateTopicAsync(
+                [new TopicTrigger("Encounter", ["create"]), new TopicTrigger("Observation", ["create"]) { Current = "status=final" }],
+                [("Encounter", "subject"), ("Observation", "subject")]);
+            (HttpStatusCode code, JObject subscription) = await SendAsync(
+                HttpMethod.Post,
+                "Subscription",
+                SubscriptionResources.Subscription(topicUrl, Webhook.BaseUrl + path, filters: [$"Encounter?subject=Patient/{patient}", $"Observation?subject=Patient/{patient}"]));
+            AssertStatus(HttpStatusCode.Created, code, subscription);
+            string subscriptionId = (string)subscription["id"];
+            try
+            {
+                await WaitForStatusAsync(subscriptionId, "active");
+                string encounter = Guid.NewGuid().ToString("N");
+                await PutEncounterAsync(encounter, patient, "planned");
+                await PutEncounterAsync(Guid.NewGuid().ToString("N"), otherPatient, "planned");
+                string observation = Guid.NewGuid().ToString("N");
+                await PutObservationAsync(observation, patient, "final");
+                await PutObservationAsync(Guid.NewGuid().ToString("N"), patient, "preliminary");
+                await PutObservationAsync(Guid.NewGuid().ToString("N"), otherPatient, "final");
+
+                (int Number, string Focus)[] events = await WaitForEventsAsync(path, 2);
+
+                Assert.Equal([(1, $"Encounter/{encounter}"), (2, $"Observation/{observation}")], events);
+            }
+            finally
+            {
+                await SendAsync(HttpMethod.Delete, $"Subscription/{subscriptionId}");
+            }
+        }
+
+        [Fact]
         public async Task GivenSubscriptionsAreEnabled_WhenCapabilitiesAreRead_ThenTheStatusOperationIsAdvertised()
         {
             Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires an in-proc server with subscriptions enabled.");
@@ -415,6 +551,70 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
             (HttpStatusCode code, JObject topic) = await SendAsync(HttpMethod.Post, TopicType, SubscriptionResources.Topic(url, Guid.NewGuid().ToString("N")));
             AssertStatus(HttpStatusCode.Created, code, topic);
             return url;
+        }
+
+        private async Task<string> CreateTopicAsync(IReadOnlyList<TopicTrigger> triggers, IReadOnlyList<(string Resource, string Parameter)> canFilterBy)
+        {
+            string url = NewTopicUrl();
+            (HttpStatusCode code, JObject topic) = await SendAsync(HttpMethod.Post, TopicType, SubscriptionResources.Topic(url, Guid.NewGuid().ToString("N"), triggers, canFilterBy));
+            AssertStatus(HttpStatusCode.Created, code, topic);
+            return url;
+        }
+
+        /// <summary>
+        /// Waits for at least <paramref name="count"/> events on <paramref name="path"/>, then for a quiet period, and returns every
+        /// delivered event as its number and focus (<c>Type/id</c>) in event order. Read from the status part of each notification,
+        /// because R5 id-only notifications list a resource changed several times only once.
+        /// </summary>
+        private async Task<(int Number, string Focus)[]> WaitForEventsAsync(string path, int count)
+        {
+            DateTime deadline = DateTime.UtcNow + Timeout;
+            while (Events(path).Length < count && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(500);
+            }
+
+            await Task.Delay(QuietPeriod);
+            return Events(path);
+        }
+
+        private (int Number, string Focus)[] Events(string path)
+        {
+            return Webhook.For(path).Where(IsEvent).SelectMany(n =>
+            {
+                JObject status = (JObject)JObject.Parse(n.Body)["entry"][0]["resource"];
+#if R4 && !R4B
+                return status["parameter"].Where(p => (string)p["name"] == "notification-event").Select(p => (
+                    int.Parse((string)p["part"].Single(part => (string)part["name"] == "event-number")["valueString"], CultureInfo.InvariantCulture),
+                    (string)p["part"].Single(part => (string)part["name"] == "focus")["valueReference"]["reference"]));
+#else
+                return status["notificationEvent"].Select(e => (int.Parse(e["eventNumber"].ToString(), CultureInfo.InvariantCulture), (string)e["focus"]["reference"]));
+#endif
+            })
+            .Select(e => (e.Item1, FocusPattern.Match(e.Item2).Value))
+            .OrderBy(e => e.Item1)
+            .ToArray();
+        }
+
+        private async Task DeleteAsync(string relativeUrl)
+        {
+            (HttpStatusCode code, _) = await SendAsync(HttpMethod.Delete, relativeUrl);
+            Assert.Equal(HttpStatusCode.NoContent, code);
+        }
+
+        private async Task PutObservationAsync(string id, string patient, string status)
+        {
+            var observation = new JObject
+            {
+                ["resourceType"] = "Observation",
+                ["id"] = id,
+                ["status"] = status,
+                ["code"] = new JObject { ["coding"] = new JArray(new JObject { ["system"] = "http://loinc.org", ["code"] = "8867-4" }) },
+                ["subject"] = new JObject { ["reference"] = $"Patient/{patient}" },
+            };
+
+            (HttpStatusCode code, _) = await SendAsync(HttpMethod.Put, $"Observation/{id}", observation.ToString());
+            Assert.True(code is HttpStatusCode.OK or HttpStatusCode.Created, $"PUT Observation returned {code}");
         }
 
         private async Task<string> CreateActiveSubscriptionAsync(string topicUrl, string path, string content, string filter)

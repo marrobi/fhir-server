@@ -30,16 +30,20 @@ It creates a topic (an R4 `Basic` resource), an `id-only` rest-hook subscription
 one notification for a matching Encounter transition, `$status`, a failing endpoint moving to `error`, a new handshake
 after an endpoint change, and that deleting the subscription stops notifications.
 
-To check what a topic can trigger on and filter by, run:
+To check what a topic can trigger on and filter by, run (works with `FHIR_VERSION` R4, R4B or R5):
 
 ```bash
-docker compose exec webhook python /app/e2e_r4_topic_scope.py http://fhir-api:8080 http://webhook:8080 http://localhost:8080
+docker compose exec webhook python /app/e2e_topic_scope.py http://fhir-api:8080 http://webhook:8080 http://localhost:8080
 ```
 
-It runs one topic per case and checks exactly which changes are notified: `supportedInteraction` (including `delete`),
-`queryCriteria` with `requireBoth`, `resultForCreate` and `resultForDelete`, `fhirPathCriteria` with `%previous` and
-`%current`, several triggers with a filter per resource type, combined `canFilterBy` filters with modifiers, and the
-topics and filters that are rejected because they cannot be evaluated in memory.
+It reads the server's FHIR version and writes resources in that version's shape, then runs one topic per case and checks
+exactly which changes are notified: `supportedInteraction` (including `delete`), `queryCriteria` with `requireBoth`,
+`resultForCreate` and `resultForDelete`, `fhirPathCriteria` with `%previous` and `%current`, several triggers with a
+filter per resource type, combined `canFilterBy` filters with modifiers, and the topics and filters that are rejected
+because they cannot be evaluated in memory. On R5 it also checks that filter comparators must be allowed by the topic.
+
+The receiver replies to notifications with an empty `Bundle`, so it can also be used with HAPI FHIR, which retries
+deliveries whose response it cannot parse as a Bundle.
 
 To try it by hand, see [Subscriptions.http](../../docs/rest/Subscriptions.http) and use `http://webhook:8080/<path>` as
 the subscription endpoint. View what was received with `curl http://localhost:8081/notifications`.
