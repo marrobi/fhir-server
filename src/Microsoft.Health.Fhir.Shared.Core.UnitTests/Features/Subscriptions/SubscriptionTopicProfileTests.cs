@@ -52,6 +52,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         [InlineData("event-trigger")]
         [InlineData("wrong-code")]
         [InlineData("trigger-without-resource")]
+        [InlineData("status-not-a-modifier")]
         public void GivenAnInvalidTopic_WhenValidatedAgainstTheProfile_ThenErrorsAreReported(string problem)
         {
             var basic = (Basic)new FhirJsonParser().Parse<Resource>(SubscriptionResources.Topic(TopicUrl));
@@ -61,13 +62,17 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
                     basic.Extension.RemoveAll(e => e.Url == SubscriptionsBackport.TopicExtensionPrefix + "url");
                     break;
                 case "event-trigger":
-                    basic.Extension.Add(new Extension(SubscriptionsBackport.TopicExtensionPrefix + "eventTrigger", null) { Extension = [new Extension("event", new CodeableConcept("http://example.org", "x"))] });
+                    basic.Extension.Add(new Extension(SubscriptionsBackport.TopicBackboneExtensionPrefix + "eventTrigger", null) { Extension = [new Extension("event", new CodeableConcept("http://example.org", "x"))] });
                     break;
                 case "wrong-code":
                     basic.Code = new CodeableConcept("http://example.org", "not-a-topic");
                     break;
+                case "status-not-a-modifier":
+                    basic.Extension.AddRange(basic.ModifierExtension);
+                    basic.ModifierExtension.Clear();
+                    break;
                 default:
-                    basic.Extension.First(e => e.Url == SubscriptionsBackport.TopicExtensionPrefix + "resourceTrigger").Extension.RemoveAll(e => e.Url == "resource");
+                    basic.Extension.First(e => e.Url == SubscriptionsBackport.TopicBackboneExtensionPrefix + "resourceTrigger").Extension.RemoveAll(e => e.Url == "resource");
                     break;
             }
 

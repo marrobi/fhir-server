@@ -17,6 +17,7 @@ import urllib.parse
 import uuid
 
 TOPIC_PREFIX = "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic."
+TOPIC_BACKBONE_PREFIX = "http://hl7.org/fhir/4.3/StructureDefinition/extension-SubscriptionTopic."
 BACKPORT = "http://hl7.org/fhir/uv/subscriptions-backport/StructureDefinition/"
 TOPIC_URL = "http://example.org/fhir/SubscriptionTopic/benchmark-encounter-cancelled"
 HEADERS = {"Content-Type": "application/fhir+json", "Accept": "application/fhir+json", "Prefer": "return=minimal"}
@@ -43,11 +44,11 @@ def topic():
     return {
         "resourceType": "Basic",
         "id": "benchmark-topic",
+        "modifierExtension": [ext(TOPIC_PREFIX + "status", valueCode="active")],
         "code": {"coding": [{"system": "http://hl7.org/fhir/fhir-types", "code": "SubscriptionTopic"}]},
         "extension": [
             ext(TOPIC_PREFIX + "url", valueUri=TOPIC_URL),
-            ext(TOPIC_PREFIX + "status", valueCode="active"),
-            {"url": TOPIC_PREFIX + "resourceTrigger", "extension": [
+            {"url": TOPIC_BACKBONE_PREFIX + "resourceTrigger", "extension": [
                 ext("resource", valueUri="Encounter"),
                 ext("supportedInteraction", valueCode="create"),
                 ext("supportedInteraction", valueCode="update"),
@@ -58,7 +59,7 @@ def topic():
                     ext("requireBoth", valueBoolean=True),
                 ]},
             ]},
-            {"url": TOPIC_PREFIX + "canFilterBy", "extension": [ext("resource", valueUri="Encounter"), ext("filterParameter", valueString="subject")]},
+            {"url": TOPIC_BACKBONE_PREFIX + "canFilterBy", "extension": [ext("resource", valueUri="Encounter"), ext("filterParameter", valueString="subject")]},
         ],
     }
 

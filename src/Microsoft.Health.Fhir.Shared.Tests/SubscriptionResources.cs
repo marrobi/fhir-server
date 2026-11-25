@@ -20,18 +20,20 @@ namespace Microsoft.Health.Fhir.Tests.Common
         public static string Topic(string url, string id = "t1")
         {
 #if R4 && !R4B
+            // HAPI FHIR's layout: metadata on the 5.0 prefix, status as a modifier extension, backbone elements on the 4.3 prefix.
             const string P = SubscriptionsBackport.TopicExtensionPrefix;
+            const string B = SubscriptionsBackport.TopicBackboneExtensionPrefix;
             var basic = new JObject
             {
                 ["resourceType"] = "Basic",
                 ["id"] = id,
+                ["modifierExtension"] = new JArray(Ext(P + "status", "valueCode", "active")),
                 ["code"] = new JObject { ["coding"] = new JArray(new JObject { ["system"] = SubscriptionsBackport.FhirTypesSystem, ["code"] = "SubscriptionTopic" }) },
                 ["extension"] = new JArray(
                     Ext(P + "url", "valueUri", url),
-                    Ext(P + "status", "valueCode", "active"),
                     new JObject
                     {
-                        ["url"] = P + "resourceTrigger",
+                        ["url"] = B + "resourceTrigger",
                         ["extension"] = new JArray(
                             Ext("resource", "valueUri", "Encounter"),
                             Ext("supportedInteraction", "valueCode", "create"),
@@ -48,7 +50,7 @@ namespace Microsoft.Health.Fhir.Tests.Common
                     },
                     new JObject
                     {
-                        ["url"] = P + "canFilterBy",
+                        ["url"] = B + "canFilterBy",
                         ["extension"] = new JArray(Ext("resource", "valueUri", "Encounter"), Ext("filterParameter", "valueString", "subject")),
                     }),
             };

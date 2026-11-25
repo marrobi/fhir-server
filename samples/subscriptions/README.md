@@ -30,6 +30,17 @@ It creates a topic (an R4 `Basic` resource), an `id-only` rest-hook subscription
 one notification for a matching Encounter transition, `$status`, a failing endpoint moving to `error`, a new handshake
 after an endpoint change, and that deleting the subscription stops notifications.
 
+To check what a topic can trigger on and filter by, run:
+
+```bash
+docker compose exec webhook python /app/e2e_r4_topic_scope.py http://fhir-api:8080 http://webhook:8080 http://localhost:8080
+```
+
+It runs one topic per case and checks exactly which changes are notified: `supportedInteraction` (including `delete`),
+`queryCriteria` with `requireBoth`, `resultForCreate` and `resultForDelete`, `fhirPathCriteria` with `%previous` and
+`%current`, several triggers with a filter per resource type, combined `canFilterBy` filters with modifiers, and the
+topics and filters that are rejected because they cannot be evaluated in memory.
+
 To try it by hand, see [Subscriptions.http](../../docs/rest/Subscriptions.http) and use `http://webhook:8080/<path>` as
 the subscription endpoint. View what was received with `curl http://localhost:8081/notifications`.
 

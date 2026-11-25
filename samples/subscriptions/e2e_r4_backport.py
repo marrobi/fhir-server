@@ -15,7 +15,9 @@ import uuid
 FHIR = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8080"
 HOOK_FOR_SERVER = sys.argv[2] if len(sys.argv) > 2 else "http://webhook:8080"
 HOOK_LOCAL = sys.argv[3] if len(sys.argv) > 3 else HOOK_FOR_SERVER
+# R4 topic layout used by HAPI FHIR: metadata on the 5.0 prefix (status as a modifier extension), backbone elements on 4.3.
 TOPIC_PREFIX = "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic."
+TOPIC_BACKBONE_PREFIX = "http://hl7.org/fhir/4.3/StructureDefinition/extension-SubscriptionTopic."
 BACKPORT = "http://hl7.org/fhir/uv/subscriptions-backport/StructureDefinition/"
 TOPIC_URL = f"http://example.org/fhir/SubscriptionTopic/encounter-finished-{uuid.uuid4().hex[:8]}"
 
@@ -62,11 +64,11 @@ def ext(url, **value):
 def topic():
     return {
         "resourceType": "Basic",
+        "modifierExtension": [ext(TOPIC_PREFIX + "status", valueCode="active")],
         "code": {"coding": [{"system": "http://hl7.org/fhir/fhir-types", "code": "SubscriptionTopic"}]},
         "extension": [
             ext(TOPIC_PREFIX + "url", valueUri=TOPIC_URL),
-            ext(TOPIC_PREFIX + "status", valueCode="active"),
-            {"url": TOPIC_PREFIX + "resourceTrigger", "extension": [
+            {"url": TOPIC_BACKBONE_PREFIX + "resourceTrigger", "extension": [
                 ext("resource", valueUri="Encounter"),
                 ext("supportedInteraction", valueCode="create"),
                 ext("supportedInteraction", valueCode="update"),
@@ -77,7 +79,7 @@ def topic():
                     ext("requireBoth", valueBoolean=True),
                 ]},
             ]},
-            {"url": TOPIC_PREFIX + "canFilterBy", "extension": [ext("resource", valueUri="Encounter"), ext("filterParameter", valueString="subject")]},
+            {"url": TOPIC_BACKBONE_PREFIX + "canFilterBy", "extension": [ext("resource", valueUri="Encounter"), ext("filterParameter", valueString="subject")]},
         ],
     }
 
@@ -120,7 +122,7 @@ def main():
 
     print("2. Unsupported topics and subscriptions are rejected")
     bad = topic()
-    bad["extension"][2]["extension"][3]["extension"][2]["valueString"] = "subject.name=x"
+    bad["extension"][1]["extension"][3]["extension"][2]["valueString"] = "subject.name=x"
     call("POST", f"{FHIR}/Basic", bad, expect=400)
     classic = subscription(HOOK_FOR_SERVER + "/hook", patient_id)
     classic["criteria"] = "Encounter?status=finished"

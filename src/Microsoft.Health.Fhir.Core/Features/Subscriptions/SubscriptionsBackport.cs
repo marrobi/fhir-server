@@ -42,9 +42,17 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         public const string FhirTypesSystem = "http://hl7.org/fhir/fhir-types";
 
         /// <summary>
-        /// The R5 cross-version extension prefix used to carry <c>SubscriptionTopic</c> elements on an R4 <c>Basic</c> resource.
+        /// The R5 cross-version extension prefix for the topic metadata on an R4 <c>Basic</c> topic (<c>url</c>, <c>version</c>,
+        /// <c>title</c>, <c>description</c>, <c>status</c>). Matches HAPI FHIR, which puts <c>status</c> in <c>modifierExtension</c>.
         /// </summary>
         public const string TopicExtensionPrefix = "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.";
+
+        /// <summary>
+        /// The R4B cross-version extension prefix for <c>resourceTrigger</c>, <c>eventTrigger</c>, <c>canFilterBy</c> and
+        /// <c>notificationShape</c> on an R4 <c>Basic</c> topic, as written by HAPI FHIR. The server also reads these elements under
+        /// <see cref="TopicExtensionPrefix"/>.
+        /// </summary>
+        public const string TopicBackboneExtensionPrefix = "http://hl7.org/fhir/4.3/StructureDefinition/extension-SubscriptionTopic.";
 
         /// <summary>
         /// This server's profile for R4 topics stored as <c>Basic</c> (ADR-2611). It is server-specific: the Backport IG leaves R4

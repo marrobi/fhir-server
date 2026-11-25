@@ -57,6 +57,38 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         }
 
 #if R4 && !R4B
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void GivenAnR4TopicInTheHapiOrTheEarlierLayout_WhenConverted_ThenStatusTriggersAndFiltersAreRead(bool hapiLayout)
+        {
+            // Arrange
+            string metadata = SubscriptionsBackport.TopicExtensionPrefix;
+            string backbone = hapiLayout ? SubscriptionsBackport.TopicBackboneExtensionPrefix : SubscriptionsBackport.TopicExtensionPrefix;
+            var status = new Extension(metadata + "status", new Code("retired"));
+            var basic = new Basic
+            {
+                Id = "t1",
+                Code = new CodeableConcept(SubscriptionsBackport.FhirTypesSystem, "SubscriptionTopic"),
+                Extension =
+                [
+                    new Extension(metadata + "url", new FhirUri(TopicUrl)),
+                    new Extension(backbone + "resourceTrigger", null) { Extension = [new Extension("resource", new FhirUri("Encounter"))] },
+                    new Extension(backbone + "canFilterBy", null) { Extension = [new Extension("filterParameter", new FhirString("subject"))] },
+                ],
+            };
+            (hapiLayout ? basic.ModifierExtension : basic.Extension).Add(status);
+
+            // Act
+            SubscriptionTopicInfo topic = _converter.ToTopic(basic.ToResourceElement());
+
+            // Assert
+            Assert.Equal(TopicUrl, topic.Canonical);
+            Assert.Equal("retired", topic.Status);
+            Assert.Equal("Encounter", Assert.Single(topic.ResourceTriggers).Resource);
+            Assert.Equal("subject", Assert.Single(topic.CanFilterBy).FilterParameter);
+        }
+
         [Fact]
         public void GivenAnOrdinaryBasicResource_WhenChecked_ThenItIsNotATopic()
         {

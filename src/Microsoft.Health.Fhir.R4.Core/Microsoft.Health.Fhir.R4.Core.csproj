@@ -37,6 +37,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Features\Subscriptions\StructureDefinition-subscription-topic-basic.json" LogicalName="subscription-topic-basic.json" />
+    <EmbeddedResource Include="Features\Subscriptions\StructureDefinition-extension-SubscriptionTopic.status.json" LogicalName="subscription-topic-status-extension.json" />
   </ItemGroup>
 
 </Project>

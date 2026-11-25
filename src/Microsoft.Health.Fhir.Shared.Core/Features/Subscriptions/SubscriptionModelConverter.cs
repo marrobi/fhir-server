@@ -80,13 +80,20 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
                 Version = TopicString(basic, "version"),
                 Title = TopicString(basic, "title"),
                 Status = TopicString(basic, "status") ?? "active",
-                ResourceTriggers = basic.GetExtensions(SubscriptionsBackport.TopicExtensionPrefix + "resourceTrigger").Select(ToTrigger).ToList(),
-                CanFilterBy = basic.GetExtensions(SubscriptionsBackport.TopicExtensionPrefix + "canFilterBy").Select(ToCanFilterBy).ToList(),
-                HasEventTriggers = basic.GetExtensions(SubscriptionsBackport.TopicExtensionPrefix + "eventTrigger").Any(),
-                HasNotificationShape = basic.GetExtensions(SubscriptionsBackport.TopicExtensionPrefix + "notificationShape").Any(),
+                ResourceTriggers = TopicExtensions(basic, "resourceTrigger").Select(ToTrigger).ToList(),
+                CanFilterBy = TopicExtensions(basic, "canFilterBy").Select(ToCanFilterBy).ToList(),
+                HasEventTriggers = TopicExtensions(basic, "eventTrigger").Any(),
+                HasNotificationShape = TopicExtensions(basic, "notificationShape").Any(),
             };
 
-            static string TopicString(Basic b, string element) => ExtensionString(b.GetExtension(SubscriptionsBackport.TopicExtensionPrefix + element));
+            // HAPI FHIR writes resourceTrigger, canFilterBy and notificationShape with the 4.3 prefix and status as a modifier
+            // extension; earlier topics use the 5.0 prefix and plain extensions. Both layouts are read.
+            static IEnumerable<Extension> TopicExtensions(Basic b, string element) =>
+                b.Extension.Concat(b.ModifierExtension).Where(e =>
+                    e.Url == SubscriptionsBackport.TopicExtensionPrefix + element ||
+                    e.Url == SubscriptionsBackport.TopicBackboneExtensionPrefix + element);
+
+            static string TopicString(Basic b, string element) => ExtensionString(TopicExtensions(b, element).FirstOrDefault());
 
             static TopicResourceTrigger ToTrigger(Extension extension)
             {

@@ -7,18 +7,21 @@
 @webhook = http://webhook:8080
 
 ### Define a topic as an R4 Basic resource: Encounter changes to status "finished", filterable by subject.
+# Same layout as HAPI FHIR: status is a modifier extension; resourceTrigger and canFilterBy use the 4.3 extension URLs.
 # @name topic
 POST {{hostname}}/Basic
 Content-Type: application/fhir+json
 
 {
   "resourceType": "Basic",
+  "modifierExtension": [
+    { "url": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.status", "valueCode": "active" }
+  ],
   "code": { "coding": [ { "system": "http://hl7.org/fhir/fhir-types", "code": "SubscriptionTopic" } ] },
   "extension": [
     { "url": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.url", "valueUri": "{{topicUrl}}" },
-    { "url": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.status", "valueCode": "active" },
     {
-      "url": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.resourceTrigger",
+      "url": "http://hl7.org/fhir/4.3/StructureDefinition/extension-SubscriptionTopic.resourceTrigger",
       "extension": [
         { "url": "resource", "valueUri": "Encounter" },
         { "url": "supportedInteraction", "valueCode": "create" },
@@ -35,7 +38,7 @@ Content-Type: application/fhir+json
       ]
     },
     {
-      "url": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.canFilterBy",
+      "url": "http://hl7.org/fhir/4.3/StructureDefinition/extension-SubscriptionTopic.canFilterBy",
       "extension": [
         { "url": "resource", "valueUri": "Encounter" },
         { "url": "filterParameter", "valueString": "subject" }

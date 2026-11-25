@@ -9,7 +9,7 @@ The feature is **off by default** and needs the **SQL Server** data store with s
 | Area | Supported | Not supported |
 |------|-----------|---------------|
 | FHIR versions | R4 (Backport), R4B (Backport), R5 | STU3 |
-| Topics | Defined through the API: `SubscriptionTopic` on R4B and R5; on R4 a `Basic` resource with code `http://hl7.org/fhir/fhir-types#SubscriptionTopic` and the R5 cross-version topic extensions | Event triggers, topics on `Subscription`, server-only topics |
+| Topics | Defined through the API: `SubscriptionTopic` on R4B and R5; on R4 a `Basic` resource with code `http://hl7.org/fhir/fhir-types#SubscriptionTopic` and cross-version topic extensions, laid out as HAPI FHIR does (see [R4 topic profile](#r4-topic-profile)) | Event triggers, topics on `Subscription`, server-only topics |
 | Triggers | `resourceTrigger` with `supportedInteraction` (`create`, `update`, `delete`), `queryCriteria` (`previous`, `current`, `resultForCreate`, `resultForDelete`, `requireBoth`) and `fhirPathCriteria` (with `%previous` and `%current`) | Chained, reverse-chained (`_has`), composite, terminology (`:in`, `:below` …) and result parameters; these are rejected when the topic is written |
 | Filters | `canFilterBy` on the topic; `filterBy` (R5) or `_criteria` filter extension (Backport) on the subscription, evaluated in memory with the same limits as criteria | |
 | Subscriptions | Topic-based only (`criteria` is the topic canonical on R4) | Classic R4 criteria-based subscriptions (rejected with 400) |
@@ -93,7 +93,15 @@ The defaults for `EventSource`, `NotifyHistoricalVersions`, `UnversionedResource
 
 ## R4 topic profile
 
-On R4, topics are `Basic` resources described by the StructureDefinition `http://fhir.microsoft.com/StructureDefinition/subscription-topic-basic` ([source](../src/Microsoft.Health.Fhir.R4.Core/Features/Subscriptions/StructureDefinition-subscription-topic-basic.json)). The server ships it, lists it in `Basic.supportedProfile` in the CapabilityStatement when subscriptions are enabled, and resolves it for `$validate` without it being uploaded:
+On R4, topics are `Basic` resources described by the StructureDefinition `http://fhir.microsoft.com/StructureDefinition/subscription-topic-basic` ([source](../src/Microsoft.Health.Fhir.R4.Core/Features/Subscriptions/StructureDefinition-subscription-topic-basic.json)). The extensions follow the layout HAPI FHIR uses, so the same topic can be written to either server:
+
+| Topic element | Where it goes on `Basic` |
+|---------------|--------------------------|
+| `url`, `version`, `title`, `description` | `extension`, URL `http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.<element>` |
+| `status` | `modifierExtension`, URL `http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.status` |
+| `resourceTrigger`, `canFilterBy` | `extension`, URL `http://hl7.org/fhir/4.3/StructureDefinition/extension-SubscriptionTopic.<element>` |
+
+The server also reads topics written with the `5.0` URL for every element and `status` as a plain extension. The server ships it, lists it in `Basic.supportedProfile` in the CapabilityStatement when subscriptions are enabled, and resolves it for `$validate` without it being uploaded:
 
 ```http
 POST /Basic/$validate?profile=http://fhir.microsoft.com/StructureDefinition/subscription-topic-basic

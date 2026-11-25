@@ -7,7 +7,7 @@
   "title": "Subscription topic as Basic (R4)",
   "status": "draft",
   "publisher": "Microsoft",
-  "description": "Defines a subscription topic on an R4 FHIR server as a Basic resource with code fhir-types#SubscriptionTopic, carrying the R5 SubscriptionTopic elements as R5 cross-version extensions. Used by the Microsoft FHIR Server for API-defined topics with the Subscriptions R5 Backport IG (ADR-2611).",
+  "description": "Defines a subscription topic on an R4 FHIR server as a Basic resource with code fhir-types#SubscriptionTopic, carrying the SubscriptionTopic elements as cross-version extensions in the layout HAPI FHIR uses: url, version, title and description as R5 (5.0) extensions, status as an R5 modifier extension, and resourceTrigger, eventTrigger and canFilterBy as R4B (4.3) extensions. Used by the Microsoft FHIR Server for API-defined topics with the Subscriptions R5 Backport IG (ADR-2611).",
   "fhirVersion": "4.0.1",
   "kind": "resource",
   "abstract": false,
@@ -20,7 +20,7 @@
         "id": "Basic",
         "path": "Basic",
         "short": "A subscription topic on an R4 server",
-        "definition": "Carries the elements of an R5 SubscriptionTopic as R5 cross-version extensions, so that topics can be defined through the API on R4 (Subscriptions R5 Backport IG). Event triggers and notification shapes are not supported by this server."
+        "definition": "Carries the elements of a SubscriptionTopic as cross-version extensions, in the layout used by HAPI FHIR, so that topics can be defined through the API on R4 (Subscriptions R5 Backport IG). Event triggers and notification shapes are not supported by this server."
       },
       {
         "id": "Basic.extension",
@@ -34,7 +34,7 @@
           ],
           "rules": "open"
         },
-        "min": 3,
+        "min": 2,
         "short": "SubscriptionTopic elements"
       },
       {
@@ -118,34 +118,6 @@
         "type": [
           {
             "code": "string"
-          }
-        ]
-      },
-      {
-        "id": "Basic.extension:status",
-        "path": "Basic.extension",
-        "sliceName": "status",
-        "short": "draft | active | retired | unknown",
-        "min": 1,
-        "max": "1"
-      },
-      {
-        "id": "Basic.extension:status.extension",
-        "path": "Basic.extension.extension",
-        "max": "0"
-      },
-      {
-        "id": "Basic.extension:status.url",
-        "path": "Basic.extension.url",
-        "fixedUri": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.status"
-      },
-      {
-        "id": "Basic.extension:status.value[x]",
-        "path": "Basic.extension.value[x]",
-        "min": 1,
-        "type": [
-          {
-            "code": "code"
           }
         ]
       },
@@ -485,7 +457,7 @@
       {
         "id": "Basic.extension:resourceTrigger.url",
         "path": "Basic.extension.url",
-        "fixedUri": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.resourceTrigger"
+        "fixedUri": "http://hl7.org/fhir/4.3/StructureDefinition/extension-SubscriptionTopic.resourceTrigger"
       },
       {
         "id": "Basic.extension:resourceTrigger.value[x]",
@@ -503,7 +475,7 @@
       {
         "id": "Basic.extension:eventTrigger.url",
         "path": "Basic.extension.url",
-        "fixedUri": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.eventTrigger"
+        "fixedUri": "http://hl7.org/fhir/4.3/StructureDefinition/extension-SubscriptionTopic.eventTrigger"
       },
       {
         "id": "Basic.extension:eventTrigger.value[x]",
@@ -675,12 +647,55 @@
       {
         "id": "Basic.extension:canFilterBy.url",
         "path": "Basic.extension.url",
-        "fixedUri": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.canFilterBy"
+        "fixedUri": "http://hl7.org/fhir/4.3/StructureDefinition/extension-SubscriptionTopic.canFilterBy"
       },
       {
         "id": "Basic.extension:canFilterBy.value[x]",
         "path": "Basic.extension.value[x]",
         "max": "0"
+      },
+      {
+        "id": "Basic.modifierExtension",
+        "path": "Basic.modifierExtension",
+        "slicing": {
+          "discriminator": [
+            {
+              "type": "value",
+              "path": "url"
+            }
+          ],
+          "rules": "open"
+        },
+        "min": 1,
+        "short": "SubscriptionTopic status"
+      },
+      {
+        "id": "Basic.modifierExtension:status",
+        "path": "Basic.modifierExtension",
+        "sliceName": "status",
+        "short": "draft | active | retired | unknown",
+        "min": 1,
+        "max": "1"
+      },
+      {
+        "id": "Basic.modifierExtension:status.extension",
+        "path": "Basic.modifierExtension.extension",
+        "max": "0"
+      },
+      {
+        "id": "Basic.modifierExtension:status.url",
+        "path": "Basic.modifierExtension.url",
+        "fixedUri": "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.status"
+      },
+      {
+        "id": "Basic.modifierExtension:status.value[x]",
+        "path": "Basic.modifierExtension.value[x]",
+        "min": 1,
+        "type": [
+          {
+            "code": "code"
+          }
+        ]
       },
       {
         "id": "Basic.code",

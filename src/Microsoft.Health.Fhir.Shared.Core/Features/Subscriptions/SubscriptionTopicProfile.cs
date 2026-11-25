@@ -13,14 +13,20 @@ using Hl7.Fhir.Specification.Source;
 namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
 {
     /// <summary>
-    /// The StructureDefinition for R4 subscription topics defined as <c>Basic</c> resources (<see cref="SubscriptionsBackport.R4TopicProfile"/>).
-    /// It ships with the R4 server, so <c>$validate</c> can check topics against it without the profile being uploaded.
+    /// The StructureDefinition for R4 subscription topics defined as <c>Basic</c> resources (<see cref="SubscriptionsBackport.R4TopicProfile"/>),
+    /// and the cross-version <c>status</c> extension it uses as a modifier extension. They ship with the R4 server, so <c>$validate</c> can
+    /// check topics without the profile or the extension being uploaded.
     /// </summary>
     public static class SubscriptionTopicProfile
     {
         private const string ResourceName = "subscription-topic-basic.json";
 
-        private static readonly Lazy<IReadOnlyList<StructureDefinition>> Definitions = new(Load);
+        // A validator must understand every modifier extension, so an unresolvable status extension is an error, not a warning.
+        private const string StatusExtensionResourceName = "subscription-topic-status-extension.json";
+
+        private static readonly Lazy<IReadOnlyList<StructureDefinition>> Definitions = new(() => Load(ResourceName));
+
+        private static readonly Lazy<IReadOnlyList<StructureDefinition>> ExtensionDefinitions = new(() => Load(StatusExtensionResourceName));
 
         /// <summary>
         /// Gets the built-in profiles for this FHIR version; empty except on R4.
@@ -31,11 +37,11 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         /// Creates a resolver for the built-in profiles.
         /// </summary>
         /// <returns>The resolver.</returns>
-        public static IResourceResolver CreateResolver() => new InMemoryResourceResolver(All);
+        public static IResourceResolver CreateResolver() => new InMemoryResourceResolver([.. All, .. ExtensionDefinitions.Value]);
 
-        private static IReadOnlyList<StructureDefinition> Load()
+        private static IReadOnlyList<StructureDefinition> Load(string resourceName)
         {
-            using Stream stream = typeof(SubscriptionTopicProfile).Assembly.GetManifestResourceStream(ResourceName);
+            using Stream stream = typeof(SubscriptionTopicProfile).Assembly.GetManifestResourceStream(resourceName);
             if (stream == null)
             {
                 return [];
