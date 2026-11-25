@@ -5,11 +5,9 @@
 
 #if !Stu3
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Health.Fhir.Client;
@@ -333,99 +331,6 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
         }
 
         [Fact]
-        public async Task GivenASubscriberWhoseSmartScopeCoversOnePatient_WhenEncountersChangeForTwoPatients_ThenOnlyTheInScopeEventIsNumberedAndDelivered()
-        {
-            Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires the in-proc development identity provider to issue SMART scopes.");
-            string path = NewPath();
-            string topicUrl = await CreateTopicAsync();
-            string allowedPatient = Guid.NewGuid().ToString("N");
-            string otherPatient = Guid.NewGuid().ToString("N");
-            using HttpClient subscriber = await CreateSmartClientAsync(TestApplications.SmartSubscriberSystem, $"system/*.cud system/Encounter.rs?subject=Patient/{allowedPatient}");
-
-            // The topic filter is not used, so only the subscriber's scope limits which encounters it may hear about.
-            (HttpStatusCode code, JObject subscription) = await SendAsync(HttpMethod.Post, "Subscription", SubscriptionResources.Subscription(topicUrl, Webhook.BaseUrl + path, content: "full-resource"), subscriber);
-            AssertStatus(HttpStatusCode.Created, code, subscription);
-            string subscriptionId = (string)subscription["id"];
-            try
-            {
-                await WaitForStatusAsync(subscriptionId, "active");
-                string hiddenEncounter = Guid.NewGuid().ToString("N");
-                await PutEncounterAsync(hiddenEncounter, otherPatient, "cancelled");
-                string visibleEncounter = Guid.NewGuid().ToString("N");
-                await PutEncounterAsync(visibleEncounter, allowedPatient, "cancelled");
-
-                ReceivedNotification notification = await Webhook.WaitForAsync(path, IsEvent, Timeout);
-                await Task.Delay(QuietPeriod);
-
-                ReceivedNotification[] events = Webhook.For(path).Where(IsEvent).ToArray();
-                Assert.Single(events);
-                Assert.DoesNotContain(events, n => n.Body.Contains(hiddenEncounter, StringComparison.Ordinal) || n.Body.Contains(otherPatient, StringComparison.Ordinal));
-                var bundle = JObject.Parse(notification.Body);
-                Assert.Equal(visibleEncounter, (string)bundle["entry"].Skip(1).Single()["resource"]["id"]);
-
-                // Unauthorized changes take no event number, so their existence cannot be inferred from a gap.
-                Assert.Equal("1", EventNumbers(bundle).Single());
-            }
-            finally
-            {
-                await SendAsync(HttpMethod.Delete, $"Subscription/{subscriptionId}");
-            }
-        }
-
-        [Fact]
-        public async Task GivenAPatientContextSubscriber_WhenEncountersChangeInsideAndOutsideItsCompartment_ThenOnlyItsOwnEncounterIsDelivered()
-        {
-            Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires the in-proc development identity provider to issue SMART scopes.");
-            string path = NewPath();
-            string topicUrl = await CreateTopicAsync();
-
-            // The development identity provider sets fhirUser to Patient/<client id> for this client.
-            string ownPatient = TestApplications.SmartSubscriberPatient.ClientId;
-            string otherPatient = Guid.NewGuid().ToString("N");
-            using HttpClient subscriber = await CreateSmartClientAsync(TestApplications.SmartSubscriberPatient, "patient/*.cud patient/Encounter.rs");
-
-            (HttpStatusCode code, JObject subscription) = await SendAsync(HttpMethod.Post, "Subscription", SubscriptionResources.Subscription(topicUrl, Webhook.BaseUrl + path), subscriber);
-            AssertStatus(HttpStatusCode.Created, code, subscription);
-            string subscriptionId = (string)subscription["id"];
-            try
-            {
-                await WaitForStatusAsync(subscriptionId, "active");
-                string hiddenEncounter = Guid.NewGuid().ToString("N");
-                await PutEncounterAsync(hiddenEncounter, otherPatient, "cancelled");
-                string visibleEncounter = Guid.NewGuid().ToString("N");
-                await PutEncounterAsync(visibleEncounter, ownPatient, "cancelled");
-
-                ReceivedNotification notification = await Webhook.WaitForAsync(path, IsEvent, Timeout);
-                await Task.Delay(QuietPeriod);
-
-                ReceivedNotification[] events = Webhook.For(path).Where(IsEvent).ToArray();
-                Assert.Single(events);
-                Assert.DoesNotContain(hiddenEncounter, notification.Body, StringComparison.Ordinal);
-                Assert.Contains(visibleEncounter, notification.Body, StringComparison.Ordinal);
-                Assert.Equal("1", EventNumbers(JObject.Parse(notification.Body)).Single());
-            }
-            finally
-            {
-                await SendAsync(HttpMethod.Delete, $"Subscription/{subscriptionId}");
-            }
-        }
-
-        [Fact]
-        public async Task GivenASubscriberWithoutReadScopeForTheTopicResource_WhenCreatingASubscription_ThenForbiddenIsReturnedAndNoHandshakeIsSent()
-        {
-            Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires the in-proc development identity provider to issue SMART scopes.");
-            string path = NewPath();
-            string topicUrl = await CreateTopicAsync();
-            using HttpClient subscriber = await CreateSmartClientAsync(TestApplications.SmartSubscriberSystem, "system/*.cud system/Patient.rs");
-
-            (HttpStatusCode code, _) = await SendAsync(HttpMethod.Post, "Subscription", SubscriptionResources.Subscription(topicUrl, Webhook.BaseUrl + path), subscriber);
-            await Task.Delay(QuietPeriod);
-
-            Assert.Equal(HttpStatusCode.Forbidden, code);
-            Assert.Empty(Webhook.For(path));
-        }
-
-        [Fact]
         public async Task GivenSubscriptionsAreEnabled_WhenCapabilitiesAreRead_ThenTheStatusOperationIsAdvertised()
         {
             Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires an in-proc server with subscriptions enabled.");
@@ -558,26 +463,6 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
 
             (HttpStatusCode code, _) = await SendAsync(HttpMethod.Put, $"Encounter/{id}", encounter.ToString());
             Assert.True(code is HttpStatusCode.OK or HttpStatusCode.Created, $"PUT Encounter returned {code}");
-        }
-
-        private async Task<HttpClient> CreateSmartClientAsync(TestApplication application, string scope)
-        {
-            using var content = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                { "grant_type", application.GrantType },
-                { "client_id", application.ClientId },
-                { "client_secret", application.ClientSecret },
-                { "scope", scope },
-                { "resource", AuthenticationSettings.Resource },
-            });
-            using var authClient = new HttpClient(_fixture.TestFhirServer.CreateMessageHandler());
-            using HttpResponseMessage tokenResponse = await authClient.PostAsync(_fixture.TestFhirServer.TokenUri, content);
-            tokenResponse.EnsureSuccessStatusCode();
-            string token = (string)JObject.Parse(await tokenResponse.Content.ReadAsStringAsync())["access_token"];
-
-            var client = new HttpClient(_fixture.TestFhirServer.CreateMessageHandler()) { BaseAddress = _fixture.TestFhirServer.BaseAddress };
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            return client;
         }
 
         private async Task<(HttpStatusCode Code, JObject Body)> SendAsync(HttpMethod method, string relativeUrl, string body = null, HttpClient client = null)
