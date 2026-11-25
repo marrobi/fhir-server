@@ -23,7 +23,8 @@ The product group (PG) and maintainers must settle these before this ADR is acce
 | 7 | How webhook credentials in subscription headers are handled (options C1–C4) | C1 for v1: allow headers, and document that they are not secure storage | See [webhook credentials](#c-webhook-credentials). |
 | 8 | Whether to block deleting a topic that active subscriptions use | Block | Allowing it stops those subscriptions without warning. |
 | 9 | Confirm that Azure Health Data Services events read `ResourceChangeData` | Owner: managed service team | If the events service uses something else, re-check [section 9 of the proposal](Proposals/fhir-subscriptions-design.md#9-impact-on-azure-health-data-services-events). |
-| 10 | What happens when a client's webhook stays unreachable (`MaxErrorHours`) | Decide before release. The prototype switches the subscription `off` and discards waiting notifications after 72 hours. | `0` (never) loses nothing and waits for the webhook to be fixed, but waiting notifications build up without limit and need monitoring. A time limit caps database growth, but an outage longer than the limit loses notifications and stops the subscription without the client noticing. A cap on the number of waiting notifications, instead of time, would need a design change. |
+| 10 | What happens when a client's webhook stays unreachable (`MaxErrorHours`) | Never switch it off (`0`, the default). The subscription stays in `error`, its waiting notifications are kept, and the server keeps checking the webhook (decision 11). Operators can set a limit if their policy requires one. | A time limit caps database growth, but an outage longer than the limit loses notifications and stops the subscription without the client noticing. For clinical workflows, that is worse than a growing backlog, which the metrics in decision 11 make visible. A cap on the number of waiting notifications, instead of time, would need a design change. |
+| 11 | How a subscription recovers from `error` (option group E) | E2: the server recovers on its own. Handshakes and heartbeats are retried like notifications. In `error`, the server sends a recovery handshake with growing gaps, up to every 15 minutes, until one succeeds. Metrics report subscriptions in `error` and waiting notifications. | E1 (manual only) leaves a subscription in `error` after a 30-second outage or one missed heartbeat until someone resets it. E3 (an operator job that resets `error` to `requested`) works, but must run in every deployment and writes a new version on every reset, which restarts the `MaxErrorHours` clock. See [recovery from error](#e-recovery-from-error). |
 
 ## Context
 
@@ -119,6 +120,36 @@ The prototype adds about 11,000 lines of feature code and 6,700 lines of tests, 
 
 Until PR 5 merges, `Subscriptions:Enabled=true` is unsupported. The CapabilityStatement does not advertise subscriptions, and subscription writes are handled as today. The release gate in [proposal section 7](Proposals/fhir-subscriptions-design.md#7-v1-release-gate) applies after PR 5.
 
+### E. Recovery from error
+
+For rest-hook, a subscription becomes `active` only after the client's endpoint answers a handshake with 2xx. Matching starts at that moment (the *activation point*). The spec says that when a notification fails the server SHOULD set `error`, when one succeeds it SHOULD set `active` again, and that it MAY set `off` after consistent failure ([R5 Subscriptions, managing subscriptions and errors](https://hl7.org/fhir/R5/subscriptions.html)). It does not say how, or whether, the server should try again while in `error`.
+
+Without automatic recovery, a subscription stays in `error` until someone writes it back as `requested`. That happens after a single failed handshake, a single missed heartbeat, or an outage longer than the notification retries (about 30 seconds with the default back-off). For a webhook that feeds clinical work, this is a safety hazard: notifications stop, and nothing restarts them.
+
+| # | Option | For | Against |
+|---|---|---|---|
+| E1 | **Manual only.** One handshake and one heartbeat attempt. In `error`, nothing happens until the client or an administrator sets `requested`. | Simplest. The spec's minimum. | A short outage stops notifications until someone notices. Each deployment needs its own monitoring and reset process. |
+| E2 | **Server recovers on its own.** Handshakes, heartbeats and notifications share one retry and back-off policy. In `error`, the server keeps sending recovery handshakes with growing gaps, capped at `MaxRetryDelaySeconds` (900). Metrics report the number of subscriptions in `error`, the number of waiting notifications and the age of the oldest. | Recovers from outages without anyone acting. Consistent for all failure types. Works the same for every deployment. | The server keeps contacting endpoints that are gone for good, at most 96 times a day per subscription, until they are switched `off` or deleted. |
+| E3 | **Operator reset job.** As E1, plus a scheduled job outside the server that writes `error` subscriptions back as `requested`. | No server change. | Every deployment must build and run the job. Each reset writes a new `Subscription` version, which adds history and restarts the `MaxErrorHours` clock, so the limit never applies. The reset must use `If-Match` so it does not overwrite a client's change. |
+
+**Recommended: E2.** Behaviour:
+
+| Situation | Behaviour |
+|---|---|
+| Handshake fails | The subscription stays `requested` and the handshake is retried with exponential back-off (2, 4, 8 and 16 seconds by default). After `MaxDeliveryAttempts` (5) failures, the subscription moves to `error`. |
+| Heartbeat fails | The subscription stays `active` and the heartbeat is retried in the same way. After 5 failures, it moves to `error`. |
+| Notification fails | The same events are retried with their original event numbers. After 5 failures, the subscription moves to `error`. |
+| In `error` | Matching continues for subscriptions that were active, and their events wait. The server sends a recovery handshake, with the gap doubling after each failure up to 15 minutes. A failed check updates only the error that `$status` reports. It does not write the `Subscription`, so it adds no history and does not restart the `MaxErrorHours` clock. |
+| A recovery handshake succeeds | The subscription returns to `active`. It keeps its original activation point, so the waiting events are sent in event-number order with their original numbers. A subscription that never became active is activated at this point. |
+| The client writes the subscription | Any write through the API resets the back-off, so a client that fixes its endpoint gets a handshake straight away. Setting `requested` still works as a manual retry. |
+| `MaxErrorHours` | `0` by default: the subscription stays in `error` and its waiting events are kept until the endpoint answers, or until it is switched `off` or deleted. When a limit is set, it is measured from when the subscription entered `error`. After the limit, the subscription is switched `off` and its waiting events are discarded (decision 10). |
+| The subscription is invalid, its topic is missing, or its grant is no longer valid | No recovery checks. These need a change by the client or an administrator, not a working endpoint. |
+| Several server instances | The per-subscription lease means only one instance sends a check at a time. The back-off is stored in `dbo.SubscriptionStates`, so it survives restarts and is shared by all instances. |
+
+**Known gap: changes before the first successful handshake are not notified.** Nothing is matched before the activation point, so a subscription whose endpoint is down when it is created misses changes made until a handshake succeeds. This is accepted and documented. A client that needs those changes runs a catch-up search after activation, for example with `_lastUpdated` from when it created the subscription.
+
+**Monitoring.** Alert on `Subscriptions.InError` above zero for longer than an agreed time, and on `Subscriptions.OldestPendingEventAge` above the latency target. `Subscriptions.PendingEvents` shows how fast the backlog is growing. These metrics and the hazard log entry for unreachable webhooks are part of the release gate.
+
 ## Proposed decision
 
 Accepting this ADR means agreeing to build FHIR topic-based subscriptions as follows. Answers to the [decisions requested](#decisions-requested) may change individual rows.
@@ -130,6 +161,7 @@ Accepting this ADR means agreeing to build FHIR topic-based subscriptions as fol
 | How do R4 clients define topics? (B) | **B2:** `Basic` resources with a published profile | Valid R4, and compatible with HAPI FHIR. |
 | How are webhook credentials handled? (C) | **C1:** allow headers, and document that they are not secure storage | Matches the spec. Stronger options can follow. |
 | How is the code delivered? (D) | **D2:** five PRs into `main`, each off by default | Each PR is small enough to review. |
+| How does a subscription recover from `error`? (E) | **E2:** the server retries handshakes and heartbeats, keeps checking an endpoint in `error`, and never switches it `off` by default | Outages end without anyone acting, and no notifications are discarded. Metrics make stuck subscriptions and backlogs visible. |
 
 The v1 scope is in [proposal section 3](Proposals/fhir-subscriptions-design.md#3-feature-support-matrix), and the design in [proposal section 6](Proposals/fhir-subscriptions-design.md#6-implementation-design).
 
@@ -154,7 +186,8 @@ The v1 scope is in [proposal section 3](Proposals/fhir-subscriptions-design.md#3
   - Delivery checks the subscriber's current server roles.
   - Administrators can find subscriptions with search and switch them `off` or delete them.
   - Operators can set `MaxLifetimeDays` if their policy requires expiry. Expired subscriptions are switched `off`, not deleted.
-- **Unreachable webhooks:** pending events wait while the subscription is in `error`. The time limit after which they are discarded and the subscription is switched `off` is decision 10.
+- **Unreachable webhooks:** pending events wait while the subscription is in `error`, and the server keeps checking the endpoint (option E2). By default they are never discarded (decision 10), so a webhook that is gone for good leaves a growing backlog until the subscription is switched `off` or deleted. Operators must alert on the backlog metrics. Each such subscription costs at most one recovery handshake every 15 minutes.
+- **Changes before activation are not notified:** a subscription whose endpoint cannot complete the first handshake misses the changes made until a handshake succeeds. Clients that need them run a catch-up search after activation. The user guide must say so.
 - **R4 topics are a server extension.** The Backport IG leaves R4 topic definition out of scope. Interoperability with HAPI FHIR 8.12.0 was checked, but other servers are not guaranteed to work.
 - **Schema:** a new schema version is required. Under D2, it ships with PR 4, before the feature is usable.
 
@@ -163,4 +196,5 @@ The v1 scope is in [proposal section 3](Proposals/fhir-subscriptions-design.md#3
 - The PG and maintainers resolve the decisions requested above.
 - The release gate requires measured throughput, database load and notification delay, plus a latency target ([proposal section 7](Proposals/fhir-subscriptions-design.md#7-v1-release-gate)).
 - A tracking issue, an owner and named reviewers are needed for each PR in the chosen phasing option.
+- The clinical-safety hazard log records unreachable webhooks and the gap before activation, with the alerts in option E as controls.
 - No existing ADR becomes obsolete. The subscription registry reuses the cache-sync pattern from [ADR-2603](adr-2603-load-independent-search-param-cache-sync.md).
