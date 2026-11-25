@@ -37,5 +37,15 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence
         /// Gets the latest server-reported error, reported by $status.
         /// </summary>
         public string Error { get; init; }
+
+        /// <summary>
+        /// Gets the number of consecutive failed handshakes, heartbeats or recovery checks. A successful notification or an API write resets it.
+        /// </summary>
+        public int ContactFailures { get; init; }
+
+        /// <summary>
+        /// Gets when the endpoint may next be contacted for a handshake, heartbeat or recovery check. Null when there is no back-off.
+        /// </summary>
+        public DateTimeOffset? NextContactUtc { get; init; }
     }
 }

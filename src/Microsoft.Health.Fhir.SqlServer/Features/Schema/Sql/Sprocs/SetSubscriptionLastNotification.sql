@@ -1,6 +1,8 @@
 --DROP PROCEDURE dbo.SetSubscriptionLastNotification
 GO
-CREATE PROCEDURE dbo.SetSubscriptionLastNotification @SubscriptionId varchar(128), @LastNotificationDate datetime
+-- Records a successful notification: clears the scheduled contact and the reported error, and sets the consecutive failure
+-- count. Delivered events and heartbeats pass 0; a recovery handshake keeps the count, so repeated failures keep backing off.
+CREATE PROCEDURE dbo.SetSubscriptionLastNotification @SubscriptionId varchar(128), @LastNotificationDate datetime, @ContactFailures int = 0
 AS
 set nocount on
 DECLARE @SP varchar(100) = object_name(@@procid)
@@ -8,7 +10,7 @@ DECLARE @SP varchar(100) = object_name(@@procid)
        ,@st datetime = getUTCdate()
 
 BEGIN TRY
-  UPDATE dbo.SubscriptionStates SET LastNotificationDate = @LastNotificationDate, UpdatedDate = getUTCdate() WHERE SubscriptionId = @SubscriptionId
+  UPDATE dbo.SubscriptionStates SET LastNotificationDate = @LastNotificationDate, ContactFailures = @ContactFailures, NextContactDate = NULL, ErrorText = NULL, UpdatedDate = getUTCdate() WHERE SubscriptionId = @SubscriptionId
 
   EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Rows=@@rowcount
 END TRY

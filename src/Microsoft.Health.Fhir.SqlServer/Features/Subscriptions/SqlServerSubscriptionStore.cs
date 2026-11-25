@@ -187,12 +187,33 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
             await cmd.ExecuteNonQueryAsync(_sqlRetryService, _logger, cancellationToken);
         }
 
-        public async Task SetLastNotificationAsync(string subscriptionId, DateTimeOffset sentUtc, CancellationToken cancellationToken)
+        public async Task SetLastNotificationAsync(string subscriptionId, DateTimeOffset sentUtc, int contactFailures, CancellationToken cancellationToken)
         {
             await using SqlCommand cmd = Procedure("dbo.SetSubscriptionLastNotification");
             cmd.Parameters.AddWithValue("@SubscriptionId", subscriptionId);
             cmd.Parameters.AddWithValue("@LastNotificationDate", sentUtc.UtcDateTime);
+            cmd.Parameters.AddWithValue("@ContactFailures", contactFailures);
             await cmd.ExecuteNonQueryAsync(_sqlRetryService, _logger, cancellationToken);
+        }
+
+        public async Task RecordContactFailureAsync(string subscriptionId, int contactFailures, DateTimeOffset nextContactUtc, string error, CancellationToken cancellationToken)
+        {
+            await using SqlCommand cmd = Procedure("dbo.RecordSubscriptionContactFailure");
+            cmd.Parameters.AddWithValue("@SubscriptionId", subscriptionId);
+            cmd.Parameters.AddWithValue("@ContactFailures", contactFailures);
+            cmd.Parameters.AddWithValue("@NextContactDate", nextContactUtc.UtcDateTime);
+            cmd.Parameters.AddWithValue("@ErrorText", (object)Truncate(error) ?? DBNull.Value);
+            await cmd.ExecuteNonQueryAsync(_sqlRetryService, _logger, cancellationToken);
+        }
+
+        public async Task<SubscriptionBacklog> GetBacklogAsync(CancellationToken cancellationToken)
+        {
+            await using SqlCommand cmd = Procedure("dbo.GetSubscriptionBacklog");
+            return (await cmd.ExecuteReaderAsync(
+                _sqlRetryService,
+                reader => new SubscriptionBacklog(reader.GetInt64(0), reader.IsDBNull(1) ? null : AsUtc(reader.GetDateTime(1))),
+                _logger,
+                cancellationToken))[0];
         }
 
         public async Task<SubscriptionEventCounts> GetEventCountsAsync(string subscriptionId, CancellationToken cancellationToken)
@@ -383,6 +404,8 @@ COMMIT TRANSACTION");
                 LastEventNumber = reader.GetInt64(4),
                 LastNotificationUtc = reader.IsDBNull(5) ? null : AsUtc(reader.GetDateTime(5)),
                 Error = reader.IsDBNull(6) ? null : reader.GetString(6),
+                ContactFailures = reader.GetInt32(7),
+                NextContactUtc = reader.IsDBNull(8) ? null : AsUtc(reader.GetDateTime(8)),
             };
         }
 

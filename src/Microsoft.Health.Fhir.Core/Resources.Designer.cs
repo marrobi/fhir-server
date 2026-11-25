@@ -2970,7 +2970,7 @@ namespace Microsoft.Health.Fhir.Core {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to Notification delivery failed after {0} attempts: {1} Set the status to requested to retry; undelivered events are retained..
+        ///   Looks up a localized string similar to Notification delivery failed after {0} attempts: {1} Undelivered events are retained. The server keeps checking the endpoint and resumes delivery when it answers..
         /// </summary>
         internal static string SubscriptionDeliveryFailed {
             get {

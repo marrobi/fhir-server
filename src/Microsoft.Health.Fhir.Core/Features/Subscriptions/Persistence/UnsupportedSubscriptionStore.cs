@@ -42,7 +42,11 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence
 
         public Task SetErrorAsync(string subscriptionId, string error, CancellationToken cancellationToken) => Task.CompletedTask;
 
-        public Task SetLastNotificationAsync(string subscriptionId, DateTimeOffset sentUtc, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task SetLastNotificationAsync(string subscriptionId, DateTimeOffset sentUtc, int contactFailures, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task RecordContactFailureAsync(string subscriptionId, int contactFailures, DateTimeOffset nextContactUtc, string error, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task<SubscriptionBacklog> GetBacklogAsync(CancellationToken cancellationToken) => Task.FromResult(new SubscriptionBacklog(0, null));
 
         public Task<SubscriptionEventCounts> GetEventCountsAsync(string subscriptionId, CancellationToken cancellationToken) => Task.FromResult(new SubscriptionEventCounts(0, 0));
 

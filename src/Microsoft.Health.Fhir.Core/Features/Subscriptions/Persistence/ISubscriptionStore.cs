@@ -68,7 +68,23 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence
         /// </summary>
         Task SetErrorAsync(string subscriptionId, string error, CancellationToken cancellationToken);
 
-        Task SetLastNotificationAsync(string subscriptionId, DateTimeOffset sentUtc, CancellationToken cancellationToken);
+        /// <summary>
+        /// Records a successful notification: clears the scheduled contact and the reported error, and sets the consecutive
+        /// failure count. Delivered events and heartbeats reset it to zero. A recovery handshake keeps it, so an endpoint that
+        /// answers handshakes but rejects events keeps backing off.
+        /// </summary>
+        Task SetLastNotificationAsync(string subscriptionId, DateTimeOffset sentUtc, int contactFailures, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Records a failed handshake, heartbeat or recovery check: the consecutive failure count, when the endpoint is next
+        /// contacted, and the error reported by $status.
+        /// </summary>
+        Task RecordContactFailureAsync(string subscriptionId, int contactFailures, DateTimeOffset nextContactUtc, string error, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Returns the pending events across all subscriptions, for monitoring.
+        /// </summary>
+        Task<SubscriptionBacklog> GetBacklogAsync(CancellationToken cancellationToken);
 
         Task<SubscriptionEventCounts> GetEventCountsAsync(string subscriptionId, CancellationToken cancellationToken);
 

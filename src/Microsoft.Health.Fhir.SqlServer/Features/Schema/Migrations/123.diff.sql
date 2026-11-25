@@ -19,7 +19,8 @@ END
 GO
 
 -- Server-owned runtime state of FHIR subscriptions (ADR-2611): the activation grant bound to the subscription content,
--- the activation watermark (only later transactions are matched), the event counter, and the per-subscription delivery lease.
+-- the activation watermark (only later transactions are matched), the event counter, the per-subscription delivery lease, and
+-- the back-off for handshakes, heartbeats and recovery checks (consecutive failures and when the endpoint is next contacted).
 IF object_id('dbo.SubscriptionStates') IS NULL
 BEGIN
   CREATE TABLE dbo.SubscriptionStates
@@ -35,6 +36,8 @@ BEGIN
       ,LeaseEndDate            datetime      NULL
       ,CreatedDate             datetime      NOT NULL CONSTRAINT DF_SubscriptionStates_CreatedDate DEFAULT getUTCdate()
       ,UpdatedDate             datetime      NOT NULL CONSTRAINT DF_SubscriptionStates_UpdatedDate DEFAULT getUTCdate()
+      ,ContactFailures         int           NOT NULL CONSTRAINT DF_SubscriptionStates_ContactFailures DEFAULT 0
+      ,NextContactDate         datetime      NULL
 
        CONSTRAINT PKC_SubscriptionStates_SubscriptionId PRIMARY KEY CLUSTERED (SubscriptionId)
     )
@@ -361,6 +364,32 @@ BEGIN CATCH
 END CATCH
 GO
 
+-- Returns the number of pending events across all subscriptions and the time of the oldest one, for monitoring.
+-- Seeks the pending range of each subscription on IX_SubscriptionEvents_SubscriptionId_Status_EventNumber, so the cost
+-- grows with the pending events, not with retained delivered ones.
+CREATE OR ALTER PROCEDURE dbo.GetSubscriptionBacklog
+AS
+set nocount on
+DECLARE @SP varchar(100) = object_name(@@procid)
+       ,@Mode varchar(200) = ''
+       ,@st datetime = getUTCdate()
+
+BEGIN TRY
+  SELECT PendingEvents = isnull(sum(P.Pending),0)
+        ,OldestPendingEventDate = min(O.EventDate)
+    FROM dbo.SubscriptionStates S
+         CROSS APPLY (SELECT Pending = count_big(*) FROM dbo.SubscriptionEvents E WHERE E.SubscriptionId = S.SubscriptionId AND E.Status = 0) P
+         OUTER APPLY (SELECT TOP 1 E.EventDate FROM dbo.SubscriptionEvents E WHERE E.SubscriptionId = S.SubscriptionId AND E.Status = 0 ORDER BY E.EventNumber) O
+
+  EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Rows=@@rowcount
+END TRY
+BEGIN CATCH
+  IF error_number() = 1750 THROW -- Real error is before 1750, cannot trap in SQL.
+  EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='Error';
+  THROW
+END CATCH
+GO
+
 CREATE OR ALTER PROCEDURE dbo.GetSubscriptionEventCounts @SubscriptionId varchar(128)
 AS
 set nocount on
@@ -434,6 +463,8 @@ BEGIN TRY
         ,LastEventNumber
         ,LastNotificationDate
         ,ErrorText
+        ,ContactFailures
+        ,NextContactDate
     FROM dbo.SubscriptionStates
     WHERE @SubscriptionId IS NULL OR SubscriptionId = @SubscriptionId
 
@@ -471,6 +502,32 @@ BEGIN CATCH
 END CATCH
 GO
 
+-- Records a failed handshake, heartbeat or recovery check: the consecutive failure count, when the endpoint is next
+-- contacted, and the error reported by $status.
+CREATE OR ALTER PROCEDURE dbo.RecordSubscriptionContactFailure @SubscriptionId varchar(128), @ContactFailures int, @NextContactDate datetime, @ErrorText nvarchar(1000) = NULL
+AS
+set nocount on
+DECLARE @SP varchar(100) = object_name(@@procid)
+       ,@Mode varchar(200) = 'S='+isnull(@SubscriptionId,'NULL')+' F='+isnull(convert(varchar,@ContactFailures),'NULL')
+       ,@st datetime = getUTCdate()
+
+BEGIN TRY
+  UPDATE dbo.SubscriptionStates
+    SET ContactFailures = @ContactFailures
+       ,NextContactDate = @NextContactDate
+       ,ErrorText = @ErrorText
+       ,UpdatedDate = getUTCdate()
+    WHERE SubscriptionId = @SubscriptionId
+
+  EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Rows=@@rowcount
+END TRY
+BEGIN CATCH
+  IF error_number() = 1750 THROW -- Real error is before 1750, cannot trap in SQL.
+  EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='Error';
+  THROW
+END CATCH
+GO
+
 CREATE OR ALTER PROCEDURE dbo.ReleaseSubscriptionLease @SubscriptionId varchar(128), @Worker varchar(100)
 AS
 set nocount on
@@ -493,6 +550,7 @@ GO
 -- Stores the activation grant of a subscription. A different content hash clears the activation watermark, so the
 -- subscription is not matched again until it completes a new handshake. Pending events matched under the previous content
 -- (filters, endpoint, authorization) are marked not authorized, so they are never sent under the new content.
+-- Every API write resets the contact back-off, so a client that fixes its endpoint gets a handshake straight away.
 CREATE OR ALTER PROCEDURE dbo.SaveSubscriptionGrant @SubscriptionId varchar(128), @ContentHash varchar(64), @GrantJson nvarchar(max)
 AS
 set nocount on
@@ -518,6 +576,8 @@ BEGIN TRY
     SET ActivationTransactionId = CASE WHEN ContentHash = @ContentHash THEN ActivationTransactionId ELSE NULL END
        ,ContentHash = @ContentHash
        ,GrantJson = @GrantJson
+       ,ContactFailures = 0
+       ,NextContactDate = NULL
        ,UpdatedDate = getUTCdate()
     WHERE SubscriptionId = @SubscriptionId
 
@@ -556,7 +616,9 @@ BEGIN CATCH
 END CATCH
 GO
 
-CREATE OR ALTER PROCEDURE dbo.SetSubscriptionLastNotification @SubscriptionId varchar(128), @LastNotificationDate datetime
+-- Records a successful notification: clears the scheduled contact and the reported error, and sets the consecutive failure
+-- count. Delivered events and heartbeats pass 0; a recovery handshake keeps the count, so repeated failures keep backing off.
+CREATE OR ALTER PROCEDURE dbo.SetSubscriptionLastNotification @SubscriptionId varchar(128), @LastNotificationDate datetime, @ContactFailures int = 0
 AS
 set nocount on
 DECLARE @SP varchar(100) = object_name(@@procid)
@@ -564,7 +626,7 @@ DECLARE @SP varchar(100) = object_name(@@procid)
        ,@st datetime = getUTCdate()
 
 BEGIN TRY
-  UPDATE dbo.SubscriptionStates SET LastNotificationDate = @LastNotificationDate, UpdatedDate = getUTCdate() WHERE SubscriptionId = @SubscriptionId
+  UPDATE dbo.SubscriptionStates SET LastNotificationDate = @LastNotificationDate, ContactFailures = @ContactFailures, NextContactDate = NULL, ErrorText = NULL, UpdatedDate = getUTCdate() WHERE SubscriptionId = @SubscriptionId
 
   EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Rows=@@rowcount
 END TRY

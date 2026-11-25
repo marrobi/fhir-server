@@ -24,9 +24,11 @@ The feature is **off by default**. It needs the **SQL Server** data store with s
 
 1. A client writes a topic, then a `Subscription` that references it. The server validates both, sets a new activation request to `requested`, and caps `end` at `MaxLifetimeDays`. Clients may request activation or retry with `requested`, or stop with `off` or `entered-in-error`. Only the server sets `active` or `error`.
 2. The server records an **authorization grant** from the caller's identity, roles, SMART scopes and compartment. It checks each event against this grant and the current role configuration before assigning an event number.
-3. The server sends a **handshake**. A 2xx response makes the subscription `active`; anything else moves it to `error`.
+3. The server sends a **handshake**. A 2xx response makes the subscription `active`. A failed handshake is retried with increasing delays; after `MaxDeliveryAttempts` failures the subscription moves to `error`. Only changes after a successful handshake are matched, so if the endpoint cannot answer at first, changes made before the handshake succeeds are **not notified**. Run a catch-up search after the subscription becomes `active` (for example with `_lastUpdated` from when you created it) if you need them.
 4. A background **pump** reads the configured event source, matches available committed versions in memory, and queues events per subscription. Matching and delivery add no synchronous step to other resource writes. Subscription and topic API writes still need validation and grant handling.
-5. A background service sends events in event-number order, up to `maxCount` per notification. It retries failed sends with increasing delays. After `MaxDeliveryAttempts`, it sets `error` and pauses delivery; later events cannot pass the failed event. Set `status` to `requested` for a new handshake and retry. Pending events stay until recovery or deactivation. After `MaxErrorHours` in `error`, the server sets `off` and discards them.
+5. A background service sends events in event-number order, up to `maxCount` per notification. It retries failed sends, and failed heartbeats, with increasing delays. After `MaxDeliveryAttempts`, it sets `error` and pauses delivery; later events cannot pass the failed event, and new changes are still matched. Pending events stay until recovery or deactivation.
+   - **Recovery is automatic.** In `error`, the server keeps sending a recovery handshake, doubling the delay after each failure up to `MaxRetryDelaySeconds` (15 minutes). When one succeeds, the subscription returns to `active` and the pending events are sent in order with their original event numbers. Failed checks update only the error reported by `$status`; they do not write a new `Subscription` version. Any update to the subscription through the API, such as setting `status` to `requested`, resets the delay so the handshake is sent straight away.
+   - By default (`MaxErrorHours` = `0`) a subscription is never switched `off` because of errors, and its pending events are never discarded. If `MaxErrorHours` is set, the server sets `off` and discards them once the subscription has been in `error` that long. Subscriptions that are invalid, whose topic is missing, or whose grant is no longer valid are not retried.
 6. Changing the endpoint, channel, topic, filters or content needs a new grant and handshake. Old pending events are retired because they were matched and authorized for different content. The grant is bound to the accepted content hash and endpoint, not to every resource version created by server status updates.
 7. Setting `off` or `entered-in-error`, deleting the subscription, or reaching `end` revokes the grant and retires pending events. An imported resource cannot create a new grant. The registry validates stored resources again, including their lifetime. Without a valid grant, no handshake or notification is sent; background validation corrects status to `off` or `error`. A raw resource read may show stale status until that check runs.
 8. Each subscription has one delivery worker at a time. Before every send, the worker renews its lease for longer than the send timeout. It checks authorization again to catch local revocation.
@@ -84,10 +86,11 @@ Settings are under `FhirServer:Subscriptions`.
 | `MaxEventsPerNotification` | `20` | Upper bound on `maxCount` (which defaults to 1). |
 | `MinHeartbeatPeriodSeconds` | `60` | Shortest heartbeat period a subscription may request. |
 | `DefaultTimeoutSeconds` / `MaxTimeoutSeconds` | `30` / `120` | Endpoint timeout when not set, and the maximum allowed. |
-| `MaxDeliveryAttempts` | `5` | Attempts before a subscription moves to `error`. |
+| `MaxDeliveryAttempts` | `5` | Attempts for a notification, handshake or heartbeat before a subscription moves to `error`. |
 | `RetryBaseDelaySeconds` | `2` | Base for exponential retry back-off. |
+| `MaxRetryDelaySeconds` | `900` | Longest back-off delay. A subscription in `error` gets a recovery handshake at least this often. |
 | `EventRetentionDays` | `7` | How long completed event records are kept, including delivered, unevaluable and no-longer-authorized events. Pending events stay until delivery or deactivation; content changes also retire old pending events. |
-| `MaxErrorHours` | `72` | How long a subscription may stay in `error` before it is set to `off` and its pending events are discarded. `0` disables the limit. |
+| `MaxErrorHours` | `0` | How long a subscription may stay in `error` before it is set to `off` and its pending events are discarded. `0`, the default, never switches it off: recovery checks continue and pending events are kept until the endpoint answers. Monitor the backlog metrics. |
 | `MaxHistoryCleanupHoldHours` | `24` | Minimum invisible-history retention while subscriptions are enabled. |
 | `PumpPeriodSeconds` / `PumpTransactionBatchSize` | `1` / `100` | Pump tick, and the number of transactions or change records per batch. |
 | `TransactionReadLagSeconds` | `5` | Read delay for `Transactions` and the margin before activation. Adds this delay to notifications. See [Event source](#event-source). |
@@ -132,6 +135,9 @@ The server emits these instruments on the `FhirServer` meter:
 | `Subscriptions.NotificationDuration` | histogram (ms) | `type`, `outcome` | Duration of each attempt |
 | `Subscriptions.StatusChanges` | counter | `status` | Status changes made by the server |
 | `Subscriptions.LateTransactions` | counter | | Transactions that committed below a cursor already passed, so their changes did not notify. Should be zero; see [Event source](#event-source) |
+| `Subscriptions.InError` | gauge | | Subscriptions in `error`, whose endpoint the server keeps checking. Alert when above zero for longer than you can tolerate |
+| `Subscriptions.PendingEvents` | gauge | | Events waiting to be delivered |
+| `Subscriptions.OldestPendingEventAge` | gauge (s) | | Age of the oldest waiting event. Alert when it exceeds your notification latency target |
 
 ## Authorization
 

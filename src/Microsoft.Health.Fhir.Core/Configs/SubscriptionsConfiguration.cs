@@ -33,14 +33,19 @@ namespace Microsoft.Health.Fhir.Core.Configs
         public int DeliveryLeaseSeconds { get; set; } = 60;
 
         /// <summary>
-        /// Gets or sets the maximum number of delivery attempts for a notification before the subscription is set to <c>error</c>.
+        /// Gets or sets the maximum number of attempts for a notification, handshake or heartbeat before the subscription is set to <c>error</c>.
         /// </summary>
         public int MaxDeliveryAttempts { get; set; } = 5;
 
         /// <summary>
-        /// Gets or sets the base delay, in seconds, for exponential back-off between delivery attempts.
+        /// Gets or sets the base delay, in seconds, for exponential back-off between attempts and between recovery checks in <c>error</c>.
         /// </summary>
         public double RetryBaseDelaySeconds { get; set; } = 2;
+
+        /// <summary>
+        /// Gets or sets the longest back-off delay, in seconds. A subscription in <c>error</c> gets a recovery handshake at least this often.
+        /// </summary>
+        public double MaxRetryDelaySeconds { get; set; } = 900;
 
         /// <summary>
         /// Gets or sets the HTTP timeout, in seconds, used when a subscription does not specify one.
@@ -98,9 +103,10 @@ namespace Microsoft.Health.Fhir.Core.Configs
 
         /// <summary>
         /// Gets or sets how long, in hours, a subscription may stay in <c>error</c> before it is set to <c>off</c> and its pending events
-        /// are discarded. Bounds the events kept for an unreachable endpoint. Zero disables the limit.
+        /// are discarded. Zero, the default, never switches it off: pending events are kept and recovery checks continue until the
+        /// endpoint answers. A limit bounds the events kept for an unreachable endpoint, but loses them after a longer outage.
         /// </summary>
-        public int MaxErrorHours { get; set; } = 72;
+        public int MaxErrorHours { get; set; }
 
         /// <summary>
         /// Gets or sets the maximum lag, in hours, by which the event pump may hold back invisible-history cleanup.

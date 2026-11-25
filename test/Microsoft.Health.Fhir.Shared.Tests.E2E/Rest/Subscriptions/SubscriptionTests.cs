@@ -275,20 +275,29 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
         }
 
         [Fact]
-        public async Task GivenAnEndpointThatRejectsEvents_WhenAChangeMatches_ThenDeliveryStopsAfterMaxAttemptsAndTheSubscriptionIsInError()
+        public async Task GivenAnEndpointThatRejectsEvents_WhenAChangeMatches_ThenTheSubscriptionMovesToErrorAndTheServerKeepsCheckingTheEndpoint()
         {
             string path = "/fail-events" + NewPath();
             string patient = Guid.NewGuid().ToString("N");
             string subscriptionId = await CreateActiveSubscriptionAsync(await CreateTopicAsync(), path, "id-only", $"Encounter?subject=Patient/{patient}");
+            int FailedEvents() => Webhook.Failed.Count(n => n.Path == path && IsEvent(n));
 
             try
             {
                 await CancelNewEncounterAsync(patient);
                 await WaitForStatusAsync(subscriptionId, "error");
-                await Task.Delay(QuietPeriod);
+                Assert.True(FailedEvents() >= InProcTestFhirServer.SubscriptionMaxDeliveryAttempts);
 
-                // No retries after the last attempt: the events stay pending until the client requests a new handshake.
-                Assert.Equal(InProcTestFhirServer.SubscriptionMaxDeliveryAttempts, Webhook.Failed.Count(n => n.Path == path && IsEvent(n)));
+                // In error, a recovery handshake is sent. This endpoint accepts it, so the retained event is retried and fails again.
+                DateTime deadline = DateTime.UtcNow + Timeout;
+                while (FailedEvents() < 2 * InProcTestFhirServer.SubscriptionMaxDeliveryAttempts && DateTime.UtcNow < deadline)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(250));
+                }
+
+                Assert.True(FailedEvents() >= 2 * InProcTestFhirServer.SubscriptionMaxDeliveryAttempts, $"Expected delivery to be retried after a recovery handshake; {FailedEvents()} failed events.");
+                Assert.True(Webhook.For(path).Count(n => n.Body.Contains("\"handshake\"", StringComparison.Ordinal)) >= 2);
+                await WaitForStatusAsync(subscriptionId, "error");
             }
             finally
             {

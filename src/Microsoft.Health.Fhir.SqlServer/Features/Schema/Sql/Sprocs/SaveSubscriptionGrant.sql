@@ -3,6 +3,7 @@ GO
 -- Stores the activation grant of a subscription. A different content hash clears the activation watermark, so the
 -- subscription is not matched again until it completes a new handshake. Pending events matched under the previous content
 -- (filters, endpoint, authorization) are marked not authorized, so they are never sent under the new content.
+-- Every API write resets the contact back-off, so a client that fixes its endpoint gets a handshake straight away.
 CREATE PROCEDURE dbo.SaveSubscriptionGrant @SubscriptionId varchar(128), @ContentHash varchar(64), @GrantJson nvarchar(max)
 AS
 set nocount on
@@ -28,6 +29,8 @@ BEGIN TRY
     SET ActivationTransactionId = CASE WHEN ContentHash = @ContentHash THEN ActivationTransactionId ELSE NULL END
        ,ContentHash = @ContentHash
        ,GrantJson = @GrantJson
+       ,ContactFailures = 0
+       ,NextContactDate = NULL
        ,UpdatedDate = getUTCdate()
     WHERE SubscriptionId = @SubscriptionId
 

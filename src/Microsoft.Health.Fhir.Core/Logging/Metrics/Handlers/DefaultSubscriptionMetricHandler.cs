@@ -6,6 +6,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.Metrics;
+using System.Threading;
 
 namespace Microsoft.Health.Fhir.Core.Logging.Metrics.Handlers
 {
@@ -18,6 +19,9 @@ namespace Microsoft.Health.Fhir.Core.Logging.Metrics.Handlers
         private readonly Histogram<double> _notificationDuration;
         private readonly Counter<long> _statusChanges;
         private readonly Counter<long> _lateTransactions;
+        private int _subscriptionsInError;
+        private long _pendingEvents;
+        private double _oldestPendingEventAgeSeconds;
 
         public DefaultSubscriptionMetricHandler(IMeterFactory meterFactory)
             : base(meterFactory)
@@ -29,6 +33,9 @@ namespace Microsoft.Health.Fhir.Core.Logging.Metrics.Handlers
             _notificationDuration = MetricMeter.CreateHistogram<double>("Subscriptions.NotificationDuration", unit: "ms", description: "Duration of subscription notification attempts.");
             _statusChanges = MetricMeter.CreateCounter<long>("Subscriptions.StatusChanges", description: "Subscription status changes made by the server, by new status.");
             _lateTransactions = MetricMeter.CreateCounter<long>("Subscriptions.LateTransactions", description: "Committed transactions the subscription event pump had already passed.");
+            MetricMeter.CreateObservableGauge("Subscriptions.InError", () => Volatile.Read(ref _subscriptionsInError), description: "Subscriptions in error, whose endpoint the server keeps checking.");
+            MetricMeter.CreateObservableGauge("Subscriptions.PendingEvents", () => Interlocked.Read(ref _pendingEvents), description: "Subscription events waiting to be delivered.");
+            MetricMeter.CreateObservableGauge("Subscriptions.OldestPendingEventAge", () => Volatile.Read(ref _oldestPendingEventAgeSeconds), unit: "s", description: "Age of the oldest subscription event waiting to be delivered.");
         }
 
         public void PumpProgress(int positions, TimeSpan lag)
@@ -66,6 +73,13 @@ namespace Microsoft.Health.Fhir.Core.Logging.Metrics.Handlers
         public void LateTransactions(int count)
         {
             _lateTransactions.Add(count);
+        }
+
+        public void Health(int subscriptionsInError, long pendingEvents, TimeSpan oldestPendingEventAge)
+        {
+            Volatile.Write(ref _subscriptionsInError, subscriptionsInError);
+            Interlocked.Exchange(ref _pendingEvents, pendingEvents);
+            Volatile.Write(ref _oldestPendingEventAgeSeconds, Math.Max(0, oldestPendingEventAge.TotalSeconds));
         }
     }
 }

@@ -45,5 +45,13 @@ namespace Microsoft.Health.Fhir.Core.Logging.Metrics
         /// </summary>
         /// <param name="count">The number of transactions.</param>
         void LateTransactions(int count);
+
+        /// <summary>
+        /// Records the current subscription health, for alerting on subscriptions stuck in <c>error</c> and on a growing backlog.
+        /// </summary>
+        /// <param name="subscriptionsInError">The number of subscriptions in <c>error</c>.</param>
+        /// <param name="pendingEvents">The number of events waiting to be delivered.</param>
+        /// <param name="oldestPendingEventAge">How long ago the oldest waiting event happened; zero when nothing is waiting.</param>
+        void Health(int subscriptionsInError, long pendingEvents, TimeSpan oldestPendingEventAge);
     }
 }

@@ -185,6 +185,50 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             Assert.Equal(new SubscriptionEventCounts(0, 0), await Store.GetEventCountsAsync("s1", CancellationToken.None));
         }
 
+        [Fact]
+        public async Task GivenContactFailures_WhenANotificationSucceedsOrTheSubscriptionIsWrittenAgain_ThenTheBackOffIsCleared()
+        {
+            // Arrange
+            await GrantAndActivateAsync("s1");
+            DateTimeOffset next = DateTimeOffset.UtcNow.AddMinutes(5);
+
+            // Act
+            await Store.RecordContactFailureAsync("s1", 3, next, "HTTP 503", CancellationToken.None);
+            SubscriptionState failed = await Store.GetStateAsync("s1", CancellationToken.None);
+            await Store.SetLastNotificationAsync("s1", DateTimeOffset.UtcNow, 0, CancellationToken.None);
+            SubscriptionState notified = await Store.GetStateAsync("s1", CancellationToken.None);
+            await Store.RecordContactFailureAsync("s1", 4, next, "HTTP 503", CancellationToken.None);
+            await Store.SaveGrantAsync("s1", "h", "{}", CancellationToken.None);
+            SubscriptionState rewritten = await Store.GetStateAsync("s1", CancellationToken.None);
+
+            // Assert
+            Assert.Equal(3, failed.ContactFailures);
+            Assert.InRange(failed.NextContactUtc.Value, next.AddSeconds(-1), next.AddSeconds(1));
+            Assert.Equal("HTTP 503", failed.Error);
+            Assert.Equal(0, notified.ContactFailures);
+            Assert.Null(notified.NextContactUtc);
+            Assert.Null(notified.Error);
+            Assert.Equal(0, rewritten.ContactFailures);
+            Assert.Null(rewritten.NextContactUtc);
+            Assert.NotNull(rewritten.ActivationTransactionId);
+        }
+
+        [Fact]
+        public async Task GivenPendingEvents_WhenTheBacklogIsRead_ThenItCountsThemAndReportsTheOldest()
+        {
+            // Arrange: other subscriptions may share the store, so compare with the backlog before.
+            await GrantAndActivateAsync("s1");
+            SubscriptionBacklog before = await Store.GetBacklogAsync(CancellationToken.None);
+
+            // Act
+            await AddPendingEventsAsync("s1", 3);
+            SubscriptionBacklog after = await Store.GetBacklogAsync(CancellationToken.None);
+
+            // Assert
+            Assert.Equal(before.PendingEvents + 3, after.PendingEvents);
+            Assert.NotNull(after.OldestPendingEventUtc);
+        }
+
         private async Task GrantAndActivateAsync(string subscriptionId, string contentHash = "h")
         {
             await Store.SaveGrantAsync(subscriptionId, contentHash, "{}", CancellationToken.None);

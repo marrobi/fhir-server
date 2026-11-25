@@ -88,18 +88,191 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         }
 
         [Fact]
-        public async Task GivenARequestedSubscription_WhenTheHandshakeFails_ThenItIsSetToErrorAndNotActivated()
+        public async Task GivenARequestedSubscription_WhenTheHandshakeFailsFewerTimesThanTheLimit_ThenItStaysRequestedAndIsRetried()
         {
+            // Arrange
             await AddSubscriptionAsync("s1");
             _channel.Results.Enqueue(ChannelDeliveryResult.Failure("HTTP 500"));
 
+            // Act
             await RunAsync();
+
+            // Assert
+            Assert.Equal(SubscriptionStatusCode.Requested, Status("s1"));
+            Assert.Equal(1, _store.States["s1"].ContactFailures);
+            Assert.Contains("HTTP 500", _store.States["s1"].Error, StringComparison.Ordinal);
+            Assert.Empty(_resources.StatusWrites);
+
+            // Act: the endpoint answers the retry.
+            await RunAsync();
+
+            // Assert
+            Assert.Equal(2, _channel.Payloads.Count);
+            Assert.Equal(SubscriptionStatusCode.Active, Status("s1"));
+            Assert.Equal(0, _store.States["s1"].ContactFailures);
+            Assert.Null(_store.States["s1"].Error);
+        }
+
+        [Fact]
+        public async Task GivenARequestedSubscription_WhenEveryHandshakeAttemptFails_ThenItIsSetToErrorAndNotActivated()
+        {
+            await AddSubscriptionAsync("s1");
+            for (int i = 0; i < _configuration.MaxDeliveryAttempts; i++)
+            {
+                _channel.Results.Enqueue(ChannelDeliveryResult.Failure("HTTP 500"));
+                await RunAsync();
+            }
 
             Assert.Equal(SubscriptionStatusCode.Error, Status("s1"));
             Assert.Null(_store.States["s1"].ActivationTransactionId);
             Assert.Contains("HTTP 500", _store.States["s1"].Error, StringComparison.Ordinal);
-            _metrics.Received(1).NotificationSent(nameof(SubscriptionNotificationType.Handshake), false, Arg.Any<TimeSpan>());
+            _metrics.Received(_configuration.MaxDeliveryAttempts).NotificationSent(nameof(SubscriptionNotificationType.Handshake), false, Arg.Any<TimeSpan>());
             _metrics.Received(1).StatusChanged(nameof(SubscriptionStatusCode.Error));
+        }
+
+        [Fact]
+        public async Task GivenASubscriptionInErrorAfterFailedHandshakes_WhenTheEndpointRecovers_ThenARecoveryHandshakeActivatesItWithoutClientAction()
+        {
+            // Arrange: the subscription reaches error, then two recovery checks fail.
+            await AddSubscriptionAsync("s1");
+            for (int i = 0; i < _configuration.MaxDeliveryAttempts + 2; i++)
+            {
+                _channel.Results.Enqueue(ChannelDeliveryResult.Failure("HTTP 503"));
+                await RunAsync();
+            }
+
+            Assert.Equal(SubscriptionStatusCode.Error, Status("s1"));
+            string versionInError = _resources.Resources[("Subscription", "s1")].VersionId;
+
+            // Act
+            await RunAsync();
+
+            // Assert: failed recovery checks did not write the resource, and the next check activated the subscription.
+            Assert.Equal(_configuration.MaxDeliveryAttempts + 3, _channel.Payloads.Count);
+            Assert.All(_channel.Payloads, p => Assert.Contains("handshake", p, StringComparison.Ordinal));
+            Assert.Equal(SubscriptionStatusCode.Active, Status("s1"));
+            Assert.Equal(_store.Visibility, _store.States["s1"].ActivationTransactionId);
+            Assert.Equal(int.Parse(versionInError, System.Globalization.CultureInfo.InvariantCulture) + 1, int.Parse(_resources.Resources[("Subscription", "s1")].VersionId, System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        [Fact]
+        public async Task GivenASubscriptionInErrorAfterFailedDelivery_WhenTheEndpointRecovers_ThenTheRetainedEventsAreDeliveredInOrderWithoutClientAction()
+        {
+            // Arrange
+            await ActivateAsync("s1");
+            long watermark = _store.States["s1"].ActivationTransactionId.Value;
+            _store.AddEvent("s1", "Encounter", "e1", 1);
+            _store.AddEvent("s1", "Encounter", "e2", 1);
+            for (int i = 0; i < _configuration.MaxDeliveryAttempts; i++)
+            {
+                _channel.Results.Enqueue(ChannelDeliveryResult.Failure("HTTP 503"));
+                await RunAsync();
+            }
+
+            Assert.Equal(SubscriptionStatusCode.Error, Status("s1"));
+            Assert.Equal(_configuration.MaxDeliveryAttempts, _store.States["s1"].ContactFailures);
+            _channel.Payloads.Clear();
+
+            // Act
+            await RunAsync();
+            await RunAsync();
+
+            // Assert: a recovery handshake, then the retained events with their original numbers, under the original watermark.
+            Assert.Contains("handshake", _channel.Payloads[0], StringComparison.Ordinal);
+            Assert.Equal(SubscriptionStatusCode.Active, Status("s1"));
+            Assert.Equal(watermark, _store.States["s1"].ActivationTransactionId);
+            Assert.All(_store.Events, e => Assert.Equal(SubscriptionEventStatus.Delivered, e.Status));
+            Assert.Equal(new long[] { 1, 2 }, _store.Events.Select(e => e.EventNumber).Order());
+        }
+
+        [Fact]
+        public async Task GivenAnEndpointThatAcceptsHandshakesButRejectsEvents_WhenRecoveryRepeats_ThenTheBackOffKeepsGrowing()
+        {
+            // Arrange: the first cycle of failed deliveries puts the subscription in error.
+            await ActivateAsync("s1");
+            _store.AddEvent("s1", "Encounter", "e1", 1);
+            for (int i = 0; i < _configuration.MaxDeliveryAttempts; i++)
+            {
+                _channel.Results.Enqueue(ChannelDeliveryResult.Failure("HTTP 500"));
+                await RunAsync();
+            }
+
+            Assert.Equal(_configuration.MaxDeliveryAttempts, _store.States["s1"].ContactFailures);
+
+            // Act: the recovery handshake succeeds, then every delivery attempt fails again.
+            await RunAsync();
+            Assert.Equal(SubscriptionStatusCode.Active, Status("s1"));
+            Assert.Equal(_configuration.MaxDeliveryAttempts, _store.States["s1"].ContactFailures);
+            for (int i = 0; i < _configuration.MaxDeliveryAttempts; i++)
+            {
+                _channel.Results.Enqueue(ChannelDeliveryResult.Failure("HTTP 500"));
+                await RunAsync();
+            }
+
+            // Assert: the successful handshake did not reset the count, so the next recovery check waits longer.
+            Assert.Equal(SubscriptionStatusCode.Error, Status("s1"));
+            Assert.Equal(_configuration.MaxDeliveryAttempts + 1, _store.States["s1"].ContactFailures);
+        }
+
+        [Fact]
+        public async Task GivenASubscriptionInError_WhenARecoveryCheckFails_ThenTheNextCheckIsDelayedUpToTheMaximum()
+        {
+            // Arrange: many failures already, so the exponential delay exceeds the cap.
+            _configuration.RetryBaseDelaySeconds = 10;
+            _configuration.MaxRetryDelaySeconds = 15;
+            await AddSubscriptionAsync("s1", status: "error");
+            _channel.Results.Enqueue(ChannelDeliveryResult.Failure("HTTP 503"));
+            _channel.Results.Enqueue(ChannelDeliveryResult.Failure("HTTP 503"));
+
+            // Act
+            DateTimeOffset before = DateTimeOffset.UtcNow;
+            await RunAsync();
+            DateTimeOffset firstDelay = _store.States["s1"].NextContactUtc.Value;
+            await RunAsync();
+
+            // Assert: the second pass is inside the back-off, so nothing more is sent.
+            Assert.Single(_channel.Payloads);
+            Assert.InRange(firstDelay, before.AddSeconds(9), DateTimeOffset.UtcNow.AddSeconds(11));
+
+            // Arrange: the back-off has passed after several failures.
+            SubscriptionState state = _store.States["s1"];
+            _store.States["s1"] = new SubscriptionState { SubscriptionId = "s1", ContentHash = state.ContentHash, Grant = state.Grant, ContactFailures = 6, NextContactUtc = DateTimeOffset.UtcNow.AddSeconds(-1) };
+
+            // Act
+            before = DateTimeOffset.UtcNow;
+            await RunAsync();
+
+            // Assert
+            Assert.Equal(2, _channel.Payloads.Count);
+            Assert.Equal(7, _store.States["s1"].ContactFailures);
+            Assert.InRange(_store.States["s1"].NextContactUtc.Value, before.AddSeconds(14), DateTimeOffset.UtcNow.AddSeconds(16));
+            Assert.Equal(SubscriptionStatusCode.Error, Status("s1"));
+        }
+
+        [Fact]
+        public async Task GivenTheDefaultConfiguration_WhenASubscriptionHasBeenInErrorForAYear_ThenItIsNotTurnedOffAndItsEventsAreKept()
+        {
+            // Arrange
+            var defaults = new SubscriptionsConfiguration();
+            _configuration.MaxErrorHours = defaults.MaxErrorHours;
+            await ActivateAsync("s1");
+            _store.AddEvent("s1", "Encounter", "e1", 1);
+            for (int i = 0; i < _configuration.MaxDeliveryAttempts; i++)
+            {
+                _channel.Results.Enqueue(ChannelDeliveryResult.Failure("HTTP 503"));
+                await RunAsync();
+            }
+
+            _resources.Put(_resources.Resources[("Subscription", "s1")], DateTimeOffset.UtcNow.AddDays(-365));
+            _channel.Results.Enqueue(ChannelDeliveryResult.Failure("HTTP 503"));
+
+            // Act
+            await RunAsync();
+
+            // Assert
+            Assert.Equal(0, defaults.MaxErrorHours);
+            Assert.Equal(SubscriptionStatusCode.Error, Status("s1"));
+            Assert.Equal(SubscriptionEventStatus.Pending, Assert.Single(_store.Events).Status);
         }
 
         [Fact]
@@ -212,6 +385,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
 
             Assert.Equal(SubscriptionStatusCode.Error, Status("s1"));
             _resources.Put(_resources.Resources[("Subscription", "s1")], DateTimeOffset.UtcNow.AddHours(-hoursInError));
+            _channel.Results.Enqueue(ChannelDeliveryResult.Failure("HTTP 503"));
 
             // Act
             await RunAsync();
@@ -346,11 +520,67 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         {
             await ActivateAsync("s1");
             _channel.Payloads.Clear();
-            await _store.SetLastNotificationAsync("s1", DateTimeOffset.UtcNow.AddHours(-2), CancellationToken.None);
+            await _store.SetLastNotificationAsync("s1", DateTimeOffset.UtcNow.AddHours(-2), 0, CancellationToken.None);
 
             await RunAsync();
 
             Assert.Contains("heartbeat", Assert.Single(_channel.Payloads), StringComparison.Ordinal);
+        }
+
+        [Fact]
+        public async Task GivenAnActiveSubscription_WhenAHeartbeatFails_ThenItStaysActiveAndTheHeartbeatIsRetried()
+        {
+            // Arrange
+            await ActivateAsync("s1");
+            await _store.SetLastNotificationAsync("s1", DateTimeOffset.UtcNow.AddHours(-2), 0, CancellationToken.None);
+            _channel.Results.Enqueue(ChannelDeliveryResult.Failure("HTTP 502"));
+
+            // Act
+            await RunAsync();
+
+            // Assert
+            Assert.Equal(SubscriptionStatusCode.Active, Status("s1"));
+            Assert.Equal(1, _store.States["s1"].ContactFailures);
+
+            // Act
+            await RunAsync();
+
+            // Assert
+            Assert.Equal(2, _channel.Payloads.Count);
+            Assert.All(_channel.Payloads, p => Assert.Contains("heartbeat", p, StringComparison.Ordinal));
+            Assert.Equal(0, _store.States["s1"].ContactFailures);
+            Assert.Null(_store.States["s1"].Error);
+        }
+
+        [Fact]
+        public async Task GivenAnActiveSubscription_WhenEveryHeartbeatAttemptFails_ThenItIsSetToErrorAndStaysActivated()
+        {
+            await ActivateAsync("s1");
+            await _store.SetLastNotificationAsync("s1", DateTimeOffset.UtcNow.AddHours(-2), 0, CancellationToken.None);
+            for (int i = 0; i < _configuration.MaxDeliveryAttempts; i++)
+            {
+                _channel.Results.Enqueue(ChannelDeliveryResult.Failure("HTTP 502"));
+                await RunAsync();
+            }
+
+            Assert.Equal(SubscriptionStatusCode.Error, Status("s1"));
+            Assert.NotNull(_store.States["s1"].ActivationTransactionId);
+        }
+
+        [Fact]
+        public async Task GivenSubscriptionsInErrorWithPendingEvents_WhenProcessed_ThenHealthIsReported()
+        {
+            // Arrange: no pass runs before the act, because health is reported at most once a minute.
+            await AddSubscriptionAsync("s1");
+            await AddSubscriptionAsync("s2", status: "error");
+            _store.AddEvent("s1", "Encounter", "e1", 1);
+            _store.AddEvent("s1", "Encounter", "e2", 1);
+
+            // Act
+            await RunAsync();
+
+            // Assert: reported at the start of the pass, before delivery.
+            _metrics.Received().Health(1, 2, Arg.Is<TimeSpan>(t => t >= TimeSpan.Zero));
         }
 
         [Fact]

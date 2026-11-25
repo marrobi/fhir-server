@@ -35,6 +35,10 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
     /// Runs the subscription lifecycle (handshake, activation, error and off transitions, <c>end</c>) and delivers notifications.
     /// Every instance runs it; a per-subscription lease in the store makes all work on one subscription single-flight, so its
     /// notifications are attempted in event-number order.
+    /// Handshakes, heartbeats and notifications are retried with back-off before the subscription is set to <c>error</c>. In
+    /// <c>error</c>, recovery handshakes continue with back-off up to <see cref="SubscriptionsConfiguration.MaxRetryDelaySeconds"/>;
+    /// the first that succeeds makes the subscription <c>active</c> again and delivery resumes from the oldest pending event.
+    /// Failed recovery handshakes do not write the subscription resource, so they do not restart the <c>MaxErrorHours</c> clock.
     /// </summary>
     public sealed class SubscriptionDeliveryService : BackgroundService, INotificationHandler<SearchParametersInitializedNotification>
     {
@@ -45,6 +49,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
 
         // An API write commits the subscription before its grant; within this period a missing grant is not yet treated as unauthorized.
         private static readonly TimeSpan GrantGracePeriod = TimeSpan.FromMinutes(1);
+
+        private static readonly TimeSpan HealthReportInterval = TimeSpan.FromMinutes(1);
 
         private readonly SubscriptionsConfiguration _configuration;
         private readonly SubscriptionRegistry _registry;
@@ -60,6 +66,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
         private readonly ISubscriptionMetricHandler _metrics;
         private readonly string _worker = $"{Environment.MachineName}.{Environment.ProcessId}.{Guid.NewGuid():N}";
         private volatile bool _storageReady;
+        private DateTimeOffset _nextHealthReportUtc = DateTimeOffset.MinValue;
 
         public SubscriptionDeliveryService(
             IOptions<SubscriptionsConfiguration> configuration,
@@ -141,6 +148,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
             SubscriptionRegistrySnapshot snapshot = await _registry.GetAsync(TimeSpan.FromSeconds(_configuration.RegistryRefreshIntervalSeconds), cancellationToken);
             Dictionary<string, SubscriptionState> states = (await _store.GetStatesAsync(cancellationToken)).ToDictionary(s => s.SubscriptionId, StringComparer.Ordinal);
             var withDueEvents = new HashSet<string>(await _store.GetSubscriptionsWithDueEventsAsync(cancellationToken), StringComparer.Ordinal);
+            await ReportHealthAsync(snapshot, cancellationToken);
 
             var candidates = new HashSet<string>(StringComparer.Ordinal);
             foreach (RegisteredSubscription subscription in snapshot.Subscriptions)
@@ -203,9 +211,9 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
 
             return status switch
             {
-                SubscriptionStatusCode.Requested => true,
-                SubscriptionStatusCode.Active => hasDueEvents || state?.ActivationTransactionId == null || IsHeartbeatDue(subscription.Info, state),
-                SubscriptionStatusCode.Error => IsErrorExpired(subscription),
+                SubscriptionStatusCode.Requested => IsContactDue(state),
+                SubscriptionStatusCode.Active => hasDueEvents || state?.ActivationTransactionId == null || (IsHeartbeatDue(subscription.Info, state) && IsContactDue(state)),
+                SubscriptionStatusCode.Error => IsErrorExpired(subscription) || IsContactDue(state),
                 _ => false,
             };
         }
@@ -225,6 +233,21 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
 
             DateTimeOffset last = state?.LastNotificationUtc ?? DateTimeOffset.MinValue;
             return Clock.UtcNow - last >= TimeSpan.FromSeconds(period);
+        }
+
+        private static bool IsContactDue(SubscriptionState state) => state?.NextContactUtc is not DateTimeOffset next || next <= Clock.UtcNow;
+
+        private TimeSpan RetryDelay(int failures) =>
+            TimeSpan.FromSeconds(Math.Min(_configuration.RetryBaseDelaySeconds * Math.Pow(2, Math.Max(0, failures - 1)), _configuration.MaxRetryDelaySeconds));
+
+        /// <summary>
+        /// Records a failed handshake, heartbeat or recovery check and schedules the next contact. Returns the consecutive failure count.
+        /// </summary>
+        private async Task<int> RecordContactFailureAsync(string subscriptionId, SubscriptionState state, string error, CancellationToken cancellationToken, int minimumFailures = 0)
+        {
+            int failures = Math.Max((state?.ContactFailures ?? 0) + 1, minimumFailures);
+            await _store.RecordContactFailureAsync(subscriptionId, failures, Clock.UtcNow + RetryDelay(failures), error, cancellationToken);
+            return failures;
         }
 
         private async Task ProcessSubscriptionAsync(string subscriptionId, CancellationToken cancellationToken)
@@ -324,7 +347,9 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
 
             switch (info.Status)
             {
-                case SubscriptionStatusCode.Requested:
+                case SubscriptionStatusCode.Requested when IsContactDue(state):
+                case SubscriptionStatusCode.Error when IsContactDue(state):
+                    // In error, this is a recovery check: it either reactivates the subscription or schedules the next check.
                     await HandshakeAsync(subscription, state, cancellationToken);
                     break;
                 case SubscriptionStatusCode.Active when state?.ActivationTransactionId == null:
@@ -359,15 +384,26 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
 
             if (!result.Succeeded)
             {
-                _logger.LogInformation("Handshake for subscription {SubscriptionId} failed: {Error}", info.Id, result.Error);
-                await SetStatusAsync(info, SubscriptionStatusCode.Error, string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionHandshakeFailed, result.Error), cancellationToken);
+                string error = string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionHandshakeFailed, result.Error);
+                int failures = await RecordContactFailureAsync(info.Id, state, error, cancellationToken);
+                _logger.LogInformation("Handshake for subscription {SubscriptionId} in status {Status} failed (attempt {Attempt}): {Error}", info.Id, info.Status, failures, result.Error);
+
+                // In error, only the back-off changes: the resource is not written, so the MaxErrorHours clock keeps running.
+                if (info.Status == SubscriptionStatusCode.Requested && failures >= _configuration.MaxDeliveryAttempts)
+                {
+                    await SetStatusAsync(info, SubscriptionStatusCode.Error, error, cancellationToken);
+                }
+
                 return;
             }
 
+            // Keeps an existing watermark, so events matched while in error are delivered in order after recovery.
+            // A recovery handshake keeps the failure count: only a delivered event or heartbeat proves the endpoint works.
             long activation = await _store.ActivateAsync(info.Id, cancellationToken);
-            await _store.SetLastNotificationAsync(info.Id, Clock.UtcNow, cancellationToken);
+            int keptFailures = info.Status == SubscriptionStatusCode.Error ? state?.ContactFailures ?? 0 : 0;
+            await _store.SetLastNotificationAsync(info.Id, Clock.UtcNow, keptFailures, cancellationToken);
             await SetStatusAsync(info, SubscriptionStatusCode.Active, null, cancellationToken);
-            _logger.LogInformation("Subscription {SubscriptionId} is active; transactions after {TransactionId} are matched.", info.Id, activation);
+            _logger.LogInformation("Subscription {SubscriptionId} is active after status {Status}; transactions after {TransactionId} are matched.", info.Id, info.Status, activation);
         }
 
         private async Task DeliverAsync(RegisteredSubscription subscription, SubscriptionState state, CancellationToken cancellationToken)
@@ -445,7 +481,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
                 if (result.Succeeded)
                 {
                     await _store.SetEventStatusAsync(info.Id, numbers, SubscriptionEventStatus.Delivered, cancellationToken);
-                    await _store.SetLastNotificationAsync(info.Id, Clock.UtcNow, cancellationToken);
+                    await _store.SetLastNotificationAsync(info.Id, Clock.UtcNow, 0, cancellationToken);
                     sent = true;
                     continue;
                 }
@@ -454,19 +490,21 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
                 _logger.LogInformation("Delivery to subscription {SubscriptionId} failed (attempt {Attempt}): {Error}", info.Id, attempts, result.Error);
                 if (attempts >= _configuration.MaxDeliveryAttempts)
                 {
-                    // The events stay pending with their numbers, and are delivered after the subscriber resets the status to requested.
+                    // The events stay pending with their numbers, and are delivered after a recovery handshake succeeds.
+                    // Recovery checks continue the back-off from this attempt count rather than starting again.
+                    string error = string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionDeliveryFailed, attempts, result.Error);
                     await _store.RecordFailedAttemptAsync(info.Id, numbers, Clock.UtcNow, result.Error, cancellationToken);
-                    await SetStatusAsync(info, SubscriptionStatusCode.Error, string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionDeliveryFailed, attempts, result.Error), cancellationToken);
+                    await RecordContactFailureAsync(info.Id, latest, error, cancellationToken, minimumFailures: attempts);
+                    await SetStatusAsync(info, SubscriptionStatusCode.Error, error, cancellationToken);
                     return;
                 }
 
-                double delaySeconds = _configuration.RetryBaseDelaySeconds * Math.Pow(2, attempts - 1);
-                await _store.RecordFailedAttemptAsync(info.Id, numbers, Clock.UtcNow.AddSeconds(delaySeconds), result.Error, cancellationToken);
+                await _store.RecordFailedAttemptAsync(info.Id, numbers, Clock.UtcNow + RetryDelay(attempts), result.Error, cancellationToken);
                 return;
             }
 
             SubscriptionState current = await _store.GetStateAsync(info.Id, cancellationToken) ?? state;
-            if (!sent && IsHeartbeatDue(info, current))
+            if (!sent && IsHeartbeatDue(info, current) && IsContactDue(current))
             {
                 ChannelDeliveryResult heartbeat = await SendAsync(
                     subscription,
@@ -487,11 +525,17 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
 
                 if (heartbeat.Succeeded)
                 {
-                    await _store.SetLastNotificationAsync(info.Id, Clock.UtcNow, cancellationToken);
+                    await _store.SetLastNotificationAsync(info.Id, Clock.UtcNow, 0, cancellationToken);
                 }
                 else
                 {
-                    await SetStatusAsync(info, SubscriptionStatusCode.Error, string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionHeartbeatFailed, heartbeat.Error), cancellationToken);
+                    string error = string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionHeartbeatFailed, heartbeat.Error);
+                    int failures = await RecordContactFailureAsync(info.Id, current, error, cancellationToken);
+                    _logger.LogInformation("Heartbeat for subscription {SubscriptionId} failed (attempt {Attempt}): {Error}", info.Id, failures, heartbeat.Error);
+                    if (failures >= _configuration.MaxDeliveryAttempts)
+                    {
+                        await SetStatusAsync(info, SubscriptionStatusCode.Error, error, cancellationToken);
+                    }
                 }
             }
         }
@@ -521,6 +565,27 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
             ChannelDeliveryResult result = await channel.SendAsync(subscription.Info, payload, cancellationToken);
             _metrics?.NotificationSent(request.Type.ToString(), result.Succeeded, Stopwatch.GetElapsedTime(started));
             return result;
+        }
+
+        private async Task ReportHealthAsync(SubscriptionRegistrySnapshot snapshot, CancellationToken cancellationToken)
+        {
+            if (_metrics == null || Clock.UtcNow < _nextHealthReportUtc)
+            {
+                return;
+            }
+
+            _nextHealthReportUtc = Clock.UtcNow + HealthReportInterval;
+            try
+            {
+                int inError = snapshot.Subscriptions.Count(s => (s.Info?.Status ?? SubscriptionStatusCodeExtensions.ParseSubscriptionStatus(s.RawStatus)) == SubscriptionStatusCode.Error);
+                SubscriptionBacklog backlog = await _store.GetBacklogAsync(cancellationToken);
+                _metrics.Health(inError, backlog.PendingEvents, backlog.OldestPendingEventUtc is DateTimeOffset oldest ? Clock.UtcNow - oldest : TimeSpan.Zero);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Monitoring must not stop delivery.
+                _logger.LogWarning(ex, "Reporting subscription health failed.");
+            }
         }
 
         private async Task DeactivateAsync(string subscriptionId, SubscriptionState state, CancellationToken cancellationToken, bool revokeGrant = false)

@@ -212,14 +212,36 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             return Task.CompletedTask;
         }
 
-        public Task SetLastNotificationAsync(string subscriptionId, DateTimeOffset sentUtc, CancellationToken cancellationToken)
+        public Task SetLastNotificationAsync(string subscriptionId, DateTimeOffset sentUtc, int contactFailures, CancellationToken cancellationToken)
         {
             lock (_sync)
             {
-                Update(subscriptionId, s => With(s, lastNotification: sentUtc));
+                Update(subscriptionId, s => With(s, lastNotification: sentUtc, error: string.Empty, contactFailures: contactFailures, clearNextContact: true));
             }
 
             return Task.CompletedTask;
+        }
+
+        public Task RecordContactFailureAsync(string subscriptionId, int contactFailures, DateTimeOffset nextContactUtc, string error, CancellationToken cancellationToken)
+        {
+            lock (_sync)
+            {
+                if (States.ContainsKey(subscriptionId))
+                {
+                    Update(subscriptionId, s => With(s, error: error ?? string.Empty, contactFailures: contactFailures, nextContact: nextContactUtc));
+                }
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task<SubscriptionBacklog> GetBacklogAsync(CancellationToken cancellationToken)
+        {
+            lock (_sync)
+            {
+                List<SubscriptionEventRecord> pending = Events.Where(e => e.Status == SubscriptionEventStatus.Pending && States.ContainsKey(e.SubscriptionId)).ToList();
+                return Task.FromResult(new SubscriptionBacklog(pending.Count, pending.Count == 0 ? null : pending.Min(e => e.EventUtc)));
+            }
         }
 
         public Task<SubscriptionEventCounts> GetEventCountsAsync(string subscriptionId, CancellationToken cancellationToken)
@@ -291,7 +313,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             }
         }
 
-        private static SubscriptionState With(SubscriptionState s, long? activation = null, bool clearActivation = false, long? lastEventNumber = null, DateTimeOffset? lastNotification = null, string error = null) => new()
+        private static SubscriptionState With(SubscriptionState s, long? activation = null, bool clearActivation = false, long? lastEventNumber = null, DateTimeOffset? lastNotification = null, string error = null, int? contactFailures = null, DateTimeOffset? nextContact = null, bool clearNextContact = false) => new()
         {
             SubscriptionId = s.SubscriptionId,
             ContentHash = s.ContentHash,
@@ -300,6 +322,8 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             LastEventNumber = lastEventNumber ?? s.LastEventNumber,
             LastNotificationUtc = lastNotification ?? s.LastNotificationUtc,
             Error = error == null ? s.Error : error.Length == 0 ? null : error,
+            ContactFailures = contactFailures ?? s.ContactFailures,
+            NextContactUtc = clearNextContact ? null : nextContact ?? s.NextContactUtc,
         };
 
         private static SubscriptionEventRecord WithEvent(SubscriptionEventRecord e, SubscriptionEventStatus? status = null, int? attempts = null, DateTimeOffset? next = null) => new()

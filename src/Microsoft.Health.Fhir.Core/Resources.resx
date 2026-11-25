@@ -1168,7 +1168,7 @@
     <value>The handshake failed: {0}</value>
   </data>
   <data name="SubscriptionDeliveryFailed" xml:space="preserve">
-    <value>Notification delivery failed after {0} attempts: {1} Set the status to requested to retry; undelivered events are retained.</value>
+    <value>Notification delivery failed after {0} attempts: {1} Undelivered events are retained. The server keeps checking the endpoint and resumes delivery when it answers.</value>
   </data>
   <data name="SubscriptionHeartbeatFailed" xml:space="preserve">
     <value>The heartbeat failed: {0}</value>

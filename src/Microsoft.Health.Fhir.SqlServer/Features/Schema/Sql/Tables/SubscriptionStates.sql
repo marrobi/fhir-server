@@ -1,7 +1,8 @@
 --DROP TABLE dbo.SubscriptionStates
 GO
 -- Server-owned runtime state of FHIR subscriptions (ADR-2611): the activation grant bound to the subscription content,
--- the activation watermark (only later transactions are matched), the event counter, and the per-subscription delivery lease.
+-- the activation watermark (only later transactions are matched), the event counter, the per-subscription delivery lease, and
+-- the back-off for handshakes, heartbeats and recovery checks (consecutive failures and when the endpoint is next contacted).
 CREATE TABLE dbo.SubscriptionStates
   (
      SubscriptionId          varchar(128)  COLLATE Latin1_General_100_CS_AS NOT NULL
@@ -15,6 +16,8 @@ CREATE TABLE dbo.SubscriptionStates
     ,LeaseEndDate            datetime      NULL
     ,CreatedDate             datetime      NOT NULL CONSTRAINT DF_SubscriptionStates_CreatedDate DEFAULT getUTCdate()
     ,UpdatedDate             datetime      NOT NULL CONSTRAINT DF_SubscriptionStates_UpdatedDate DEFAULT getUTCdate()
+    ,ContactFailures         int           NOT NULL CONSTRAINT DF_SubscriptionStates_ContactFailures DEFAULT 0
+    ,NextContactDate         datetime      NULL
 
      CONSTRAINT PKC_SubscriptionStates_SubscriptionId PRIMARY KEY CLUSTERED (SubscriptionId)
   )

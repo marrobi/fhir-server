@@ -15,6 +15,8 @@ BEGIN TRY
         ,LastEventNumber
         ,LastNotificationDate
         ,ErrorText
+        ,ContactFailures
+        ,NextContactDate
     FROM dbo.SubscriptionStates
     WHERE @SubscriptionId IS NULL OR SubscriptionId = @SubscriptionId
 
