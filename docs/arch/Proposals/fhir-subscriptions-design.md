@@ -95,7 +95,8 @@ Delivery is **best-effort**. Clients use event numbers and heartbeats to find nu
 2. A care-management app creates a `Subscription` on that topic. It sets the filter `patient=Patient/123`, the channel `rest-hook` and an `https://` endpoint. It omits the payload level, so the server sets `id-only`. The subscription starts as `requested`.
 3. The server sends a handshake. The endpoint answers 200, so the subscription becomes `active`.
 4. A clinician saves an `Encounter` for `Patient/123`. A few seconds later, the app receives a notification containing event number 1 and the `Encounter` URL. The app reads the `Encounter` with its own access token.
-5. The endpoint goes down. After the retries run out, the subscription moves to `error`. When the endpoint is back, the app sets the status to `requested` again. After a new handshake, the pending events are sent in order.
+5. The endpoint goes down. After the retries run out, the subscription moves to `error`. Changes are still matched, and their events wait. The server keeps sending a recovery handshake, with growing gaps up to every 15 minutes. When the endpoint is back, a handshake succeeds, the subscription returns to `active`, and the waiting events are sent in order with their original numbers. Nobody has to act.
+6. If the endpoint had been down when the app created the subscription, changes made before the first successful handshake would not be notified. The app runs a catch-up search after activation to find them.
 
 ### 2.2 Subscription status lifecycle
 
@@ -103,10 +104,11 @@ Delivery is **best-effort**. Clients use event numbers and heartbeats to find nu
 stateDiagram-v2
   [*] --> requested: client creates
   requested --> active: handshake 2xx (server)
-  requested --> error: handshake fails (server)
-  active --> error: retries exhausted (server)
+  requested --> error: handshake retries exhausted (server)
+  active --> error: notification or heartbeat retries exhausted (server)
+  error --> active: recovery handshake 2xx (server)
   error --> requested: client retries
-  error --> off: MaxErrorHours passed (server)
+  error --> off: MaxErrorHours passed, if set (server)
   active --> off: client stops, end reached or grant revoked
   requested --> off: client stops
   off --> requested: client re-requests
@@ -209,15 +211,15 @@ Filters and criteria are evaluated **in memory** against the changed resource an
 | Feature | Spec | Support |
 |---|---|---|
 | `event-notification` | Core | ✅ v1 |
-| `handshake` on activation | **SHALL** for rest-hook | ✅ v1. **Always on.** A new or re-requested rest-hook subscription stays `requested` until the endpoint answers 2xx. Then it becomes `active`. A failed handshake sets `error`. |
-| `heartbeat` | Core | ✅ v1 |
+| `handshake` on activation | **SHALL** for rest-hook | ✅ v1. **Always on.** A new or re-requested rest-hook subscription stays `requested` until the endpoint answers 2xx. Then it becomes `active`. A failed handshake is retried with back-off; after `MaxDeliveryAttempts` failures the subscription moves to `error`. Changes before the first successful handshake are not notified (6.3, rule 4). |
+| `heartbeat` | Core | ✅ v1. A failed heartbeat is retried like a notification before the subscription moves to `error`. |
 | `query-status` through `$status` (instance and type level) | **SHALL** | ✅ v1 |
 | `query-event` through `$events` (replay past events) | MAY | ⏳ Later. Limited to the event retention window. |
 | `eventsSinceSubscriptionStart` and `notificationEvent.eventNumber` | Core | ✅ v1. Numbers are assigned after the access check (3.7). `Unevaluable` events use a number but are not sent. Lost source rows and changes the subscriber cannot read get no number (decision 3). |
 | `notificationEvent.focus`. It is absent for `empty`. For `id-only`, each entry has `fullUrl` and `request`. For `full-resource`, each entry has the resource, or `request` and `response` when the resource cannot be included. | Core / Backport | ✅ v1. Checked by profile validation in the release gate. |
 | `notificationEvent.additionalContext` | Core | ⏳ Later, with `notificationShape` |
 | `SubscriptionStatus.error` reporting | Core | ✅ v1 |
-| Error handling: retries with back-off, then `error`; persistent failure, then `off`; the client resets to `requested` | SHOULD | ✅ v1. See design decision 7. |
+| Error handling: retries with back-off, then `error`; `active` again when a notification succeeds; optionally `off` after persistent failure | SHOULD | ✅ v1. In `error`, the server keeps sending recovery handshakes and returns the subscription to `active` when one succeeds. It never switches it `off` unless `MaxErrorHours` is set. The client can also reset it to `requested`. See design decision 7. |
 | Ordered sending per subscription | Not required | ✅ v1. **One notification at a time per subscription.** Later events cannot overtake a failed event. A failing endpoint blocks only its own subscription. |
 | Stored, retried sends with stable event numbers | Best-effort required | ✅ v1. A retry reuses the same event number. Receipt is not guaranteed, so clients remove duplicates by event number. |
 | Guaranteed (reliable) channels | Optional | ❌ No |
@@ -365,21 +367,25 @@ Each decision gives the rule, the reason, and its limits.
    - **Why:** transaction IDs come from the SQL Server clock. If the clock steps backwards, a later transaction can get a lower ID than the saved cursor. Reading a few seconds behind reduces this risk.
    - **Limit:** a transaction that commits behind a cursor already passed is counted in `Subscriptions.LateTransactions` and logged, but not notified. An ordinary long transaction only holds back the watermark. It is not skipped just because it takes longer than the margin.
    - **First run:** the worker starts at the watermark, or at the earliest stored activation point if that is lower.
+   - **Limit:** nothing is matched before the first successful handshake. If the endpoint cannot answer when the subscription is created, changes made until a handshake succeeds are not notified and get no event number. This is accepted and documented: clients run a catch-up search after activation.
 5. **In-memory matching.**
    - **Rule:** a new evaluator in `Core/Features/Subscriptions/Matching` reuses `ISearchIndexer`, `ISearchOptionsFactory` and `IFhirPathProvider`.
    - **Why:** no database query per change per subscription.
    - **Limit:** criteria that need the database are rejected when the topic or subscription is written (3.4).
 6. **Stored events and state.**
    - **Rule:** `dbo.SubscriptionEvents` stores event numbers, resource versions, interactions, send status and retry details.
-   - **Rule:** `dbo.SubscriptionStates` stores grants, accepted content hashes, activation points, event counters, errors and delivery leases.
+   - **Rule:** `dbo.SubscriptionStates` stores grants, accepted content hashes, activation points, event counters, errors, delivery leases and the contact back-off (consecutive failed handshakes, heartbeats or recovery checks, and when the endpoint is next contacted).
    - **Rule:** sent and other finished events expire after `EventRetentionDays` (7). Pending events never expire under this setting.
    - **Locking:** deleting a subscription, and cleaning up finished events, remove rows in batches below SQL Server's lock escalation threshold, so they do not block the worker or other subscriptions. The delivery service finishes any interrupted deletion.
    - **Limit:** a content change or revocation retires all of a subscription's pending events in one transaction, so that none are sent under the new content. A very large backlog can briefly escalate to a table lock.
 7. **One send at a time.**
    - **Rule:** a hosted background service sends notifications. It is not a `TaskManagement` job.
    - **Rule:** a per-subscription lease (`DeliveryLeaseSeconds`, 60) stops two instances sending at once. It is renewed before each send, for longer than the HTTP timeout. If the lease is lost, sending stops.
-   - **Rule:** each event gets up to `MaxDeliveryAttempts` (5) tries, with exponential back-off. After that, the subscription moves to `error` and sending pauses.
-   - **Limit:** after `MaxErrorHours` (72 in the prototype) in `error`, the server sets `off` and discards pending events. `0` turns this limit off. The default is ADR decision 10.
+   - **Rule:** notifications, handshakes and heartbeats each get up to `MaxDeliveryAttempts` (5) tries, with exponential back-off from `RetryBaseDelaySeconds` (2). After that, the subscription moves to `error` and sending pauses. A subscription that was active keeps being matched, so its events wait.
+   - **Rule:** in `error`, the server sends a recovery handshake whenever the back-off allows. The delay doubles after each failure, up to `MaxRetryDelaySeconds` (900). A failed check records only the error reported by `$status`; it does not write the `Subscription`. A successful check sets `active`, keeps the original activation point and makes the waiting events due, so they are sent in order with their original numbers. Any API write to the subscription resets the back-off.
+   - **Rule:** subscriptions that are invalid, whose topic is missing, or whose grant is no longer valid get no recovery checks, because a working endpoint does not fix them.
+   - **Limit:** `MaxErrorHours` is `0` by default, so a subscription in `error` is never switched `off` and its waiting events are never discarded (ADR decision 10). When it is set, the time counts from when the subscription entered `error`. After that, the server sets `off` and discards the waiting events.
+   - **Monitoring:** `Subscriptions.InError`, `Subscriptions.PendingEvents` and `Subscriptions.OldestPendingEventAge` are reported once a minute, so operators can alert on stuck subscriptions and growing backlogs.
    - **Limit:** receipt is not guaranteed, and a notification may arrive twice.
 8. **Registry and grants.**
    - **Rule:** each instance caches subscriptions and topics. The cache refreshes after changes and every `RegistryRefreshIntervalSeconds` (10). Stored content is validated again before use.
@@ -427,8 +433,9 @@ All settings are under `FhirServer:Subscriptions`. **PG** marks defaults the pro
 | `PumpPeriodSeconds` / `PumpTransactionBatchSize` | 1 / 100 | Worker polling interval, and transactions saved per commit. |
 | `RegistryRefreshIntervalSeconds` | 10 | Registry refresh interval. |
 | `DeliveryPollingIntervalSeconds` / `DeliveryLeaseSeconds` | 1 / 60 | Delivery polling interval and per-subscription lease. |
-| `MaxDeliveryAttempts` / `RetryBaseDelaySeconds` | 5 / 2 | Retries before `error`, and the back-off base. |
-| `MaxErrorHours` | 72 (prototype) | How long a subscription whose webhook keeps failing stays in `error` before it is switched `off` and its waiting notifications are discarded. `0` = never. **PG** |
+| `MaxDeliveryAttempts` / `RetryBaseDelaySeconds` | 5 / 2 | Attempts for a notification, handshake or heartbeat before `error`, and the back-off base. |
+| `MaxRetryDelaySeconds` | 900 | Longest back-off. A subscription in `error` gets a recovery handshake at least this often. |
+| `MaxErrorHours` | `0` (never) | How long a subscription whose webhook keeps failing stays in `error` before it is switched `off` and its waiting notifications are discarded. `0` keeps it in `error`, with recovery checks, until the webhook answers. **PG** |
 | `EventRetentionDays` | 7 | How long finished events are kept. |
 | `DefaultTimeoutSeconds` / `MaxTimeoutSeconds` | 30 / 120 | HTTP timeout, and its cap. |
 | `MinHeartbeatPeriodSeconds` | 60 | Shortest heartbeat a client may request. |
@@ -457,7 +464,8 @@ v1 ships only when all of these pass:
   5. Repeat with the worker stopped mid-page: readable changes replay without duplicate event numbers.
   6. Repeat with access revoked between matching and sending: the event is not sent.
 - **Payloads:** E2E tests against a local webhook receiver for R4 Backport, R4B and R5. The first entry is `Parameters` or `SubscriptionStatus` as expected. Results are validated against the Backport and R5 profiles for every payload level: `empty` has no focus, and `id-only` entries have `fullUrl` and `request`.
-- **Handshake:** success leads to `active`, and failure leads to `error`.
+- **Handshake and recovery:** success leads to `active`. Repeated failure leads to `error`, and a later successful recovery handshake returns the subscription to `active` and delivers the waiting events in order, without client action.
+- **Monitoring:** alerts on `Subscriptions.InError` and `Subscriptions.OldestPendingEventAge` are defined, and the clinical-safety hazard log covers unreachable webhooks and the gap before activation.
 - **Resilience:** tests with a backlog over 10,000 transactions, and crash-replay tests, pass.
 - **Load:** `tools/PerfTester` results, including notification delay during `$import`, meet the agreed targets.
 - **No change when off:** regression tests pass with `Subscriptions:Enabled=false`, and with both subscriptions and `SupportsResourceChangeCapture` on. Existing behaviour does not change.
@@ -566,7 +574,9 @@ The open decisions are listed once, in the ADR's [Decisions requested](../adr-26
 | `SubscriptionEvents` grows and adds database load | Medium | Medium | `EventRetentionDays`, batched cleanup, `MaxErrorHours`, and load measurement |
 | History is cleaned up before the worker reads it, so changes are missed with no gap | Low (needs a backlog over 24 hours) | Medium | History hold, `UnversionedResourceTypes`, a lag metric and alert |
 | Access removed in the identity provider is not seen, and subscriptions never expire by default | Medium | Medium | Checks against current server roles, administrators searching for subscriptions and switching them `off`, documentation, and the optional `MaxLifetimeDays` |
-| A subscription stops without the client noticing (because `end` passed, `MaxErrorHours` passed, or the grant was revoked), so notifications are missed | Medium | High | Never expire by default (ADR decision 6). Decide the webhook-failure limit (ADR decision 10). Heartbeats let clients notice silence. `$status` and metrics report the reason a subscription stopped. Alert on subscriptions that move to `off`. |
+| A subscription stops without the client noticing (because `end` passed, `MaxErrorHours` passed, or the grant was revoked), so notifications are missed | Medium | High | Never expire and never switch `off` after errors by default (ADR decisions 6 and 10). Recover from `error` automatically (ADR decision 11). Heartbeats let clients notice silence. `$status` and metrics report the reason a subscription stopped. Alert on subscriptions in `error` and on subscriptions that move to `off`. |
+| A webhook stays unreachable, so notifications are delayed and the backlog grows | Medium | High | Automatic recovery checks (ADR decision 11). Alerts on `Subscriptions.InError` and `Subscriptions.OldestPendingEventAge`. Administrators switch `off` subscriptions whose endpoint is gone for good. |
+| The endpoint is down when a subscription is created, so changes before the first successful handshake are missed with no gap | Low | Medium | Handshake retries and recovery checks shorten the gap. Document it, and advise a catch-up search after activation. |
 | Webhook credentials in headers or endpoint URLs are visible to readers and in exports | Medium | Medium | ADR decision 7. Document limited-use, revocable values (C1). Consider hiding values (C2) or signed notifications (C4) after v1. |
 | A topic is changed or deleted while subscriptions use it | Medium | Low | ADR decision 8. Decide whether trigger changes force subscriptions to be requested again. |
 | Feature PRs stall again | Medium | High | ADR option D2, ownership rules (8.3) and Appendix A |
@@ -578,7 +588,7 @@ A prototype was built to test the design. It is on [`marrobi/fhir-server` `featu
 - **Size:** about 11,000 lines of feature code and 6,700 lines of tests, plus 1,200 lines of docs and samples, in about 190 files. ADR option group D breaks these down by PR.
 - **Imported history:** a version counts as written as history if a later version of the same resource was already written by the same or an earlier transaction. `NotifyHistoricalVersions` applies only to these versions, not to ordinary versions that became history later.
 - **Clock steps:** SQL clock steps of about 0.7 seconds were seen on laptops. This led to `TransactionReadLagSeconds` (design decision 4).
-- **Metrics:** the `FhirServer` meter should report worker progress and lag, event outcomes, send attempts and duration, status changes, and late transactions.
+- **Metrics:** the `FhirServer` meter should report worker progress and lag, event outcomes, send attempts and duration, status changes, late transactions, subscriptions in `error`, waiting events and the age of the oldest waiting event.
 - **Tests:** the prototype has unit, SQL integration and in-process HTTP E2E tests for R4, R4B and R5. No load or latency results are recorded yet.
 
 ## Appendix A. Lessons from earlier attempts
