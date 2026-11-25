@@ -145,6 +145,21 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             Assert.Empty(_validator.ValidateSubscription(subscription, ValidTopic()));
         }
 
+        [Theory]
+        [InlineData("gt", new[] { "gt", "lt" }, true)]
+        [InlineData("ge", new[] { "gt", "lt" }, false)]
+        [InlineData("eq", new[] { "gt", "lt" }, true)]
+        [InlineData("ge", new string[0], true)]
+        public void GivenAFilterComparator_WhenValidated_ThenOnlyComparatorsTheTopicAllowsAreAccepted(string comparator, string[] allowed, bool accepted)
+        {
+            SubscriptionTopicInfo topic = Copy(ValidTopic(), canFilterBy: [new TopicCanFilterBy { Resource = "Encounter", FilterParameter = "date", Comparators = allowed }]);
+            SubscriptionInfo subscription = With(filters: [new SubscriptionFilter { ResourceType = "Encounter", FilterParameter = "date", Comparator = comparator, Value = "2026-01-01" }]);
+
+            IReadOnlyList<string> errors = _validator.ValidateSubscription(subscription, topic);
+
+            Assert.Equal(accepted, errors.Count == 0);
+        }
+
         private static SubscriptionTopicInfo ValidTopic() => new()
         {
             Canonical = "http://example.org/topic/encounter",

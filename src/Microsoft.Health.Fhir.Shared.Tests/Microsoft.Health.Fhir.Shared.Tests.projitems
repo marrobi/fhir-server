@@ -19,6 +19,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Samples.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)SubscriptionResources.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)TopicTrigger.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)TopicFilter.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Search\SearchValueValidationHelper.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)SetModelInfoProviderAssemblyFixture.cs" />
   </ItemGroup>

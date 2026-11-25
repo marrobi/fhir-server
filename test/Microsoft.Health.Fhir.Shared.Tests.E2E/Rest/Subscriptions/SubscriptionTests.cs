@@ -36,6 +36,15 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
         private static readonly TimeSpan QuietPeriod = TimeSpan.FromSeconds(6);
         private static readonly Regex FocusPattern = new("[A-Z][A-Za-z]+/[0-9a-f]{32}", RegexOptions.Compiled);
 
+#if R4B
+        // R4B's canFilterBy.modifier binding (SubscriptionSearchModifier) has no "not"; an empty list allows any modifier.
+        private static readonly string[] StatusModifiers = [];
+        private static readonly string[] RestrictedStatusModifiers = ["in"];
+#else
+        private static readonly string[] StatusModifiers = ["not"];
+        private static readonly string[] RestrictedStatusModifiers = ["not"];
+#endif
+
         private readonly SubscriptionsTestFixture _fixture;
         private readonly HttpClient _client;
 
@@ -291,36 +300,65 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
         }
 
         [Theory]
-        [InlineData("unknown-topic")]
-        [InlineData("ftp-endpoint")]
-        [InlineData("unsupported-filter")]
-        public async Task GivenAnInvalidSubscription_WhenCreated_ThenBadRequestIsReturned(string problem)
+        [InlineData("unknown-topic", "is not defined on this server")]
+        [InlineData("ftp-endpoint", null)]
+        [InlineData("parameter-not-in-can-filter-by", "The filter parameter 'class' is not allowed")]
+        [InlineData("modifier-not-allowed", "The modifier 'missing' is not allowed")]
+        [InlineData("resource-type-not-allowed", "The filter parameter 'status' is not allowed")]
+        public async Task GivenAnInvalidSubscription_WhenCreated_ThenBadRequestIsReturned(string problem, string reason)
         {
             Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires an in-proc server with subscriptions enabled.");
-            string topicUrl = await CreateTopicAsync();
+            string topicUrl = await CreateTopicAsync(
+                [new TopicTrigger("Encounter", ["update"])],
+                [("Encounter", "subject"), new TopicFilter("Encounter", "status") { Modifiers = RestrictedStatusModifiers }]);
             string body = problem switch
             {
                 "unknown-topic" => SubscriptionResources.Subscription($"http://example.org/topics/missing-{Guid.NewGuid():N}", Webhook.BaseUrl + NewPath()),
                 "ftp-endpoint" => SubscriptionResources.Subscription(topicUrl, "ftp://example.org/hook"),
-                _ => SubscriptionResources.Subscription(topicUrl, Webhook.BaseUrl + NewPath(), filter: "Encounter?status=planned"),
+                "parameter-not-in-can-filter-by" => SubscriptionResources.Subscription(topicUrl, Webhook.BaseUrl + NewPath(), filter: "Encounter?class=AMB"),
+                "modifier-not-allowed" => SubscriptionResources.Subscription(topicUrl, Webhook.BaseUrl + NewPath(), filter: "Encounter?status:missing=true"),
+                _ => SubscriptionResources.Subscription(topicUrl, Webhook.BaseUrl + NewPath(), filter: "Observation?status=final"),
             };
 
             (HttpStatusCode code, JObject outcome) = await SendAsync(HttpMethod.Post, "Subscription", body);
 
             Assert.Equal(HttpStatusCode.BadRequest, code);
             Assert.Equal("OperationOutcome", (string)outcome["resourceType"]);
+            if (reason != null)
+            {
+                Assert.Contains(reason, Diagnostics(outcome), StringComparison.Ordinal);
+            }
         }
 
-        [Fact]
-        public async Task GivenATopicWithUnsupportedCriteria_WhenCreated_ThenBadRequestIsReturned()
+        [Theory]
+        [InlineData("chained", "is not supported in subscription criteria")]
+        [InlineData("reverse-chained", "is not supported in subscription criteria")]
+        [InlineData("terminology-modifier", "is not supported in subscription criteria")]
+        [InlineData("criteria-for-another-type", "does not apply to resource type")]
+        [InlineData("invalid-fhirpath", "is not valid")]
+        [InlineData("unknown-resource-type", "is not a known resource type")]
+        [InlineData("unknown-filter-parameter", "is not a search parameter")]
+        [InlineData("event-trigger", "event triggers are not supported")]
+        public async Task GivenATopicTheServerCannotEvaluate_WhenCreated_ThenBadRequestIsReturned(string problem, string reason)
         {
             Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires an in-proc server with subscriptions enabled.");
-            string body = SubscriptionResources.Topic(NewTopicUrl(), Guid.NewGuid().ToString("N")).Replace("status=cancelled\"", "subject:Patient.name=x\"", StringComparison.Ordinal);
+            TopicTrigger trigger = problem switch
+            {
+                "chained" => new TopicTrigger("Encounter", ["update"]) { Current = "subject:Patient.name=x" },
+                "reverse-chained" => new TopicTrigger("Encounter", ["update"]) { Current = "_has:Observation:encounter:status=final" },
+                "terminology-modifier" => new TopicTrigger("Encounter", ["update"]) { Current = "type:in=http://example.org/vs" },
+                "criteria-for-another-type" => new TopicTrigger("Encounter", ["update"]) { Current = "Patient?gender=male" },
+                "invalid-fhirpath" => new TopicTrigger("Encounter", ["update"]) { FhirPathCriteria = "%current.status = = 'x'" },
+                "unknown-resource-type" => new TopicTrigger("NotAType", ["update"]),
+                _ => new TopicTrigger("Encounter", ["update"]),
+            };
+            TopicFilter filter = problem == "unknown-filter-parameter" ? new TopicFilter("Encounter", "not-a-parameter") : new TopicFilter("Encounter", "subject");
+            string body = SubscriptionResources.Topic(NewTopicUrl(), Guid.NewGuid().ToString("N"), [trigger], [filter], eventTrigger: problem == "event-trigger");
 
             (HttpStatusCode code, JObject outcome) = await SendAsync(HttpMethod.Post, TopicType, body);
 
             Assert.Equal(HttpStatusCode.BadRequest, code);
-            Assert.Equal("OperationOutcome", (string)outcome["resourceType"]);
+            Assert.Contains(reason, Diagnostics(outcome), StringComparison.Ordinal);
         }
 
         [Fact]
@@ -467,6 +505,96 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
         }
 
         [Fact]
+        public async Task GivenQueryCriteriaWhereCreatesFailThePreviousTest_WhenEncountersAreCreatedAndUpdated_ThenOnlyAnUpdateFromTheRequiredStateIsNotified()
+        {
+            Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires an in-proc server with subscriptions enabled and a local receiver.");
+            string path = NewPath();
+            string patient = Guid.NewGuid().ToString("N");
+            var trigger = new TopicTrigger("Encounter", ["create", "update"])
+            {
+                Previous = "status=in-progress",
+                ResultForCreate = "test-fails",
+                Current = "status=cancelled",
+                RequireBoth = true,
+            };
+            string topicUrl = await CreateTopicAsync([trigger], [("Encounter", "subject")]);
+            string subscriptionId = await CreateActiveSubscriptionAsync(topicUrl, path, "id-only", $"Encounter?subject=Patient/{patient}");
+            try
+            {
+                await PutEncounterAsync(Guid.NewGuid().ToString("N"), patient, "cancelled");
+                string transitioned = Guid.NewGuid().ToString("N");
+                await PutEncounterAsync(transitioned, patient, "in-progress");
+                await PutEncounterAsync(transitioned, patient, "cancelled");
+                await PutEncounterAsync(transitioned, patient, "cancelled");
+                string skipped = Guid.NewGuid().ToString("N");
+                await PutEncounterAsync(skipped, patient, "planned");
+                await PutEncounterAsync(skipped, patient, "cancelled");
+
+                (int Number, string Focus)[] events = await WaitForEventsAsync(path, 1);
+
+                // Created as cancelled fails the previous test (resultForCreate), and planned -> cancelled fails it on the stored version.
+                Assert.Equal([(1, $"Encounter/{transitioned}")], events);
+            }
+            finally
+            {
+                await SendAsync(HttpMethod.Delete, $"Subscription/{subscriptionId}");
+            }
+        }
+
+        [Fact]
+        public async Task GivenFiltersOnTwoParametersWithAnAllowedModifier_WhenEncountersAreCreated_ThenOnlyEncountersMatchingBothAreNotified()
+        {
+            Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires an in-proc server with subscriptions enabled and a local receiver.");
+            string path = NewPath();
+            string patient = Guid.NewGuid().ToString("N");
+            string otherPatient = Guid.NewGuid().ToString("N");
+            string topicUrl = await CreateTopicAsync(
+                [new TopicTrigger("Encounter", ["create"])],
+                [("Encounter", "subject"), new TopicFilter("Encounter", "status") { Modifiers = StatusModifiers }]);
+            string subscriptionId = await CreateActiveSubscriptionAsync(topicUrl, path, "id-only", $"Encounter?subject=Patient/{patient}&status:not=cancelled");
+            try
+            {
+                await PutEncounterAsync(Guid.NewGuid().ToString("N"), patient, "cancelled");
+                string kept = Guid.NewGuid().ToString("N");
+                await PutEncounterAsync(kept, patient, "planned");
+                await PutEncounterAsync(Guid.NewGuid().ToString("N"), otherPatient, "planned");
+
+                (int Number, string Focus)[] events = await WaitForEventsAsync(path, 1);
+
+                Assert.Equal([(1, $"Encounter/{kept}")], events);
+            }
+            finally
+            {
+                await SendAsync(HttpMethod.Delete, $"Subscription/{subscriptionId}");
+            }
+        }
+
+#if R5
+        [Theory]
+        [InlineData("gt", HttpStatusCode.Created)]
+        [InlineData("ge", HttpStatusCode.BadRequest)]
+        public async Task GivenATopicThatAllowsSomeComparators_WhenSubscribingWithAComparator_ThenOnlyAllowedComparatorsAreAccepted(string comparator, HttpStatusCode expected)
+        {
+            Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires an in-proc server with subscriptions enabled.");
+            string topicUrl = await CreateTopicAsync([new TopicTrigger("Encounter", ["update"])], [new TopicFilter("Encounter", "date") { Comparators = ["gt", "lt"] }]);
+            JObject subscription = JObject.Parse(SubscriptionResources.Subscription(topicUrl, Webhook.BaseUrl + NewPath(), filter: "Encounter?date=2026-01-01"));
+            subscription["filterBy"][0]["comparator"] = comparator;
+
+            (HttpStatusCode code, JObject body) = await SendAsync(HttpMethod.Post, "Subscription", subscription.ToString());
+
+            AssertStatus(expected, code, body);
+            if (code == HttpStatusCode.Created)
+            {
+                await SendAsync(HttpMethod.Delete, $"Subscription/{(string)body["id"]}");
+            }
+            else
+            {
+                Assert.Contains($"The comparator '{comparator}' is not allowed", Diagnostics(body), StringComparison.Ordinal);
+            }
+        }
+#endif
+
+        [Fact]
         public async Task GivenSubscriptionsAreEnabled_WhenCapabilitiesAreRead_ThenTheStatusOperationIsAdvertised()
         {
             Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires an in-proc server with subscriptions enabled.");
@@ -505,6 +633,8 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
         {
             Assert.True(expected == actual, $"Expected {expected} but got {actual}: {body}");
         }
+
+        private static string Diagnostics(JObject outcome) => string.Join(" | ", outcome["issue"].Select(i => (string)i["diagnostics"]));
 
         private static bool IsEvent(ReceivedNotification notification) => notification.Body.Contains("\"event-notification\"", StringComparison.Ordinal);
 
@@ -553,7 +683,7 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
             return url;
         }
 
-        private async Task<string> CreateTopicAsync(IReadOnlyList<TopicTrigger> triggers, IReadOnlyList<(string Resource, string Parameter)> canFilterBy)
+        private async Task<string> CreateTopicAsync(IReadOnlyList<TopicTrigger> triggers, IReadOnlyList<TopicFilter> canFilterBy)
         {
             string url = NewTopicUrl();
             (HttpStatusCode code, JObject topic) = await SendAsync(HttpMethod.Post, TopicType, SubscriptionResources.Topic(url, Guid.NewGuid().ToString("N"), triggers, canFilterBy));

@@ -24,7 +24,7 @@ namespace Microsoft.Health.Fhir.Tests.Common
                 [new TopicTrigger("Encounter", ["create", "update"]) { Previous = "status:not=cancelled", ResultForCreate = "test-passes", Current = "status=cancelled", RequireBoth = true }],
                 [("Encounter", "subject")]);
 
-        public static string Topic(string url, string id, IReadOnlyList<TopicTrigger> triggers, IReadOnlyList<(string Resource, string Parameter)> canFilterBy)
+        public static string Topic(string url, string id, IReadOnlyList<TopicTrigger> triggers, IReadOnlyList<TopicFilter> canFilterBy, bool eventTrigger = false)
         {
 #if R4 && !R4B
             // HAPI FHIR's layout: metadata on the 5.0 prefix, status as a modifier extension, backbone elements on the 4.3 prefix.
@@ -58,9 +58,25 @@ namespace Microsoft.Health.Fhir.Tests.Common
                 extensions.Add(new JObject { ["url"] = B + "resourceTrigger", ["extension"] = parts });
             }
 
-            foreach ((string resource, string parameter) in canFilterBy)
+            foreach (TopicFilter filter in canFilterBy)
             {
-                extensions.Add(new JObject { ["url"] = B + "canFilterBy", ["extension"] = new JArray(Ext("resource", "valueUri", resource), Ext("filterParameter", "valueString", parameter)) });
+                var parts = new JArray(Ext("resource", "valueUri", filter.Resource), Ext("filterParameter", "valueString", filter.Parameter));
+                foreach (string modifier in filter.Modifiers)
+                {
+                    parts.Add(Ext("modifier", "valueCode", modifier));
+                }
+
+                foreach (string comparator in filter.Comparators)
+                {
+                    parts.Add(Ext("comparator", "valueCode", comparator));
+                }
+
+                extensions.Add(new JObject { ["url"] = B + "canFilterBy", ["extension"] = parts });
+            }
+
+            if (eventTrigger)
+            {
+                extensions.Add(new JObject { ["url"] = B + "eventTrigger", ["extension"] = new JArray(new JObject { ["url"] = "event", ["valueCodeableConcept"] = new JObject { ["text"] = "x" } }) });
             }
 
             var basic = new JObject
@@ -97,9 +113,20 @@ namespace Microsoft.Health.Fhir.Tests.Common
             }
 
             var filters = new JArray();
-            foreach ((string resource, string parameter) in canFilterBy)
+            foreach (TopicFilter filter in canFilterBy)
             {
-                filters.Add(new JObject { ["resource"] = resource, ["filterParameter"] = parameter });
+                var canFilter = new JObject { ["resource"] = filter.Resource, ["filterParameter"] = filter.Parameter };
+                if (filter.Modifiers.Length > 0)
+                {
+                    canFilter["modifier"] = new JArray(filter.Modifiers);
+                }
+
+                if (filter.Comparators.Length > 0)
+                {
+                    canFilter["comparator"] = new JArray(filter.Comparators);
+                }
+
+                filters.Add(canFilter);
             }
 
             var topic = new JObject
@@ -111,6 +138,12 @@ namespace Microsoft.Health.Fhir.Tests.Common
                 ["resourceTrigger"] = resourceTriggers,
                 ["canFilterBy"] = filters,
             };
+
+            if (eventTrigger)
+            {
+                topic["eventTrigger"] = new JArray(new JObject { ["event"] = new JObject { ["text"] = "x" }, ["resource"] = "Encounter" });
+            }
+
             return topic.ToString();
 #endif
         }
@@ -151,7 +184,14 @@ namespace Microsoft.Health.Fhir.Tests.Common
                     IReadOnlyList<KeyValuePair<string, string>> parameters = SubscriptionQueryParser.Parse(criteria, out string type);
                     foreach (KeyValuePair<string, string> parameter in parameters)
                     {
-                        filterBy.Add(new JObject { ["resourceType"] = type, ["filterParameter"] = parameter.Key, ["value"] = parameter.Value });
+                        string[] key = parameter.Key.Split(':', 2);
+                        var entry = new JObject { ["resourceType"] = type, ["filterParameter"] = key[0], ["value"] = parameter.Value };
+                        if (key.Length > 1)
+                        {
+                            entry["modifier"] = key[1];
+                        }
+
+                        filterBy.Add(entry);
                     }
                 }
 
