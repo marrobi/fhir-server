@@ -11,6 +11,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using EnsureThat;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Primitives;
+using Microsoft.Health.Core.Features.Context;
+using Microsoft.Health.Fhir.Core.Features.Context;
 using Microsoft.Health.Fhir.Core.Features.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Search;
 using Microsoft.Health.Fhir.Core.Models;
@@ -28,12 +31,14 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly IResourceDeserializer _deserializer;
         private readonly ISubscriptionModelConverter _converter;
+        private readonly RequestContextAccessor<IFhirRequestContext> _requestContextAccessor;
 
-        public SubscriptionResourceLoader(IServiceScopeFactory scopeFactory, IResourceDeserializer deserializer, ISubscriptionModelConverter converter)
+        public SubscriptionResourceLoader(IServiceScopeFactory scopeFactory, IResourceDeserializer deserializer, ISubscriptionModelConverter converter, RequestContextAccessor<IFhirRequestContext> requestContextAccessor)
         {
             _scopeFactory = EnsureArg.IsNotNull(scopeFactory, nameof(scopeFactory));
             _deserializer = EnsureArg.IsNotNull(deserializer, nameof(deserializer));
             _converter = EnsureArg.IsNotNull(converter, nameof(converter));
+            _requestContextAccessor = EnsureArg.IsNotNull(requestContextAccessor, nameof(requestContextAccessor));
         }
 
         public Task<IReadOnlyList<ResourceElement>> GetSubscriptionsAsync(CancellationToken cancellationToken)
@@ -81,6 +86,32 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         }
 
         private async Task<IReadOnlyList<ResourceElement>> SearchAllAsync(string resourceType, IReadOnlyList<Tuple<string, string>> parameters, CancellationToken cancellationToken)
+        {
+            // The registry is shared by every caller, so it must not be filtered by the SMART scopes or compartment of whichever
+            // request happens to trigger a load. Authorization of events uses each subscription's own grant instead.
+            IFhirRequestContext callerContext = _requestContextAccessor.RequestContext;
+            _requestContextAccessor.RequestContext = new FhirRequestContext(
+                method: "SubscriptionRegistry",
+                uriString: "https://localhost/",
+                baseUriString: "https://localhost/",
+                correlationId: callerContext?.CorrelationId ?? Guid.NewGuid().ToString(),
+                requestHeaders: new Dictionary<string, StringValues>(),
+                responseHeaders: new Dictionary<string, StringValues>())
+            {
+                IsBackgroundTask = true,
+            };
+
+            try
+            {
+                return await SearchAllAsSystemAsync(resourceType, parameters, cancellationToken);
+            }
+            finally
+            {
+                _requestContextAccessor.RequestContext = callerContext;
+            }
+        }
+
+        private async Task<IReadOnlyList<ResourceElement>> SearchAllAsSystemAsync(string resourceType, IReadOnlyList<Tuple<string, string>> parameters, CancellationToken cancellationToken)
         {
             using IServiceScope scope = _scopeFactory.CreateScope();
             ISearchService searchService = scope.ServiceProvider.GetRequiredService<ISearchService>();

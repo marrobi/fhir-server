@@ -38,6 +38,11 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Common
 
         public static TestApplication SmartPractitionerA { get; } = new TestApplication("smart-practitioner-A");
 
+        // Registered only by the in-proc server with subscriptions enabled: write plus SMART, so SMART scopes apply to the writes.
+        public static TestApplication SmartSubscriberSystem { get; } = new TestApplication("smart-subscriber-system");
+
+        public static TestApplication SmartSubscriberPatient { get; } = new TestApplication("smart-subscriber-patient");
+
         public static TestApplication WrongAudienceClient { get; } = new TestApplication("wrongAudienceClient");
     }
 }

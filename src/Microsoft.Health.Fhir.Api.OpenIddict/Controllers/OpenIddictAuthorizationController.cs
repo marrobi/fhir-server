@@ -82,7 +82,8 @@ namespace Microsoft.Health.Fhir.Api.OpenIddict.Controllers
                 var r = role?.Split(':', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
                 if (r?.Length == 2)
                 {
-                    identity.SetClaim(_authorizationConfiguration.RolesClaim, r[^1]);
+                    // AddClaim, not SetClaim: SetClaim replaces earlier values, so only the last role would be issued.
+                    identity.AddClaim(_authorizationConfiguration.RolesClaim, r[^1]);
                 }
             }
 

@@ -25,6 +25,7 @@ using Microsoft.Health.Fhir.Core.Configs;
 using Microsoft.Health.Fhir.Core.Models;
 using Microsoft.Health.Fhir.CosmosDb.Features.Storage;
 using Microsoft.Health.Fhir.Tests.Common.FixtureParameters;
+using Microsoft.Health.Fhir.Tests.E2E.Common;
 using Newtonsoft.Json.Linq;
 
 namespace Microsoft.Health.Fhir.Tests.E2E.Rest
@@ -69,6 +70,16 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest
                 configuration["FhirServer:Subscriptions:RetryBaseDelaySeconds"] = "0.5";
                 configuration["FhirServer:Subscriptions:MaxDeliveryAttempts"] = "2";
                 configuration["FhirServer:Subscriptions:MinHeartbeatPeriodSeconds"] = "2";
+
+                // SMART subscribers: the smart data action is never part of '*', so these clients need both roles.
+                string[] smartSubscribers = [TestApplications.SmartSubscriberSystem.ClientId, TestApplications.SmartSubscriberPatient.ClientId];
+                for (int i = 0; i < smartSubscribers.Length; i++)
+                {
+                    string prefix = $"DevelopmentIdentityProvider:ClientApplications:{100 + i}";
+                    configuration[$"{prefix}:Id"] = smartSubscribers[i];
+                    configuration[$"{prefix}:Roles:0"] = "globalWriter";
+                    configuration[$"{prefix}:Roles:1"] = "smartUser";
+                }
             }
 
             configuration["TestAuthEnvironment:FilePath"] = Path.Join(AppContext.BaseDirectory, "testauthenvironment.json");
