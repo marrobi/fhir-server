@@ -3,7 +3,7 @@ GO
 -- Stores the activation grant of a subscription. A different content hash clears the activation watermark, so the
 -- subscription is not matched again until it completes a new handshake. Pending events matched under the previous content
 -- (filters, endpoint, authorization) are marked not authorized, so they are never sent under the new content.
-CREATE PROCEDURE dbo.SaveSubscriptionGrant @SubscriptionId varchar(64), @ContentHash varchar(64), @GrantJson nvarchar(max)
+CREATE PROCEDURE dbo.SaveSubscriptionGrant @SubscriptionId varchar(128), @ContentHash varchar(64), @GrantJson nvarchar(max)
 AS
 set nocount on
 set xact_abort on

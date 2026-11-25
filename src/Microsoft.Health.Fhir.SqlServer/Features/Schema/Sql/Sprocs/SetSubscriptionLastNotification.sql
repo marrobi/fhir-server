@@ -1,6 +1,6 @@
 --DROP PROCEDURE dbo.SetSubscriptionLastNotification
 GO
-CREATE PROCEDURE dbo.SetSubscriptionLastNotification @SubscriptionId varchar(64), @LastNotificationDate datetime
+CREATE PROCEDURE dbo.SetSubscriptionLastNotification @SubscriptionId varchar(128), @LastNotificationDate datetime
 AS
 set nocount on
 DECLARE @SP varchar(100) = object_name(@@procid)

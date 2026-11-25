@@ -1,6 +1,6 @@
 --DROP PROCEDURE dbo.GetSubscriptionStates
 GO
-CREATE PROCEDURE dbo.GetSubscriptionStates @SubscriptionId varchar(64) = NULL
+CREATE PROCEDURE dbo.GetSubscriptionStates @SubscriptionId varchar(128) = NULL
 AS
 set nocount on
 DECLARE @SP varchar(100) = object_name(@@procid)

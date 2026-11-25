@@ -1,7 +1,7 @@
 --DROP PROCEDURE dbo.GetSubscriptionEvents
 GO
 -- Returns the oldest events of a subscription with the given status, in event-number order.
-CREATE PROCEDURE dbo.GetSubscriptionEvents @SubscriptionId varchar(64), @Status tinyint = 0, @MaxCount int = 1
+CREATE PROCEDURE dbo.GetSubscriptionEvents @SubscriptionId varchar(128), @Status tinyint = 0, @MaxCount int = 1
 AS
 set nocount on
 DECLARE @SP varchar(100) = object_name(@@procid)

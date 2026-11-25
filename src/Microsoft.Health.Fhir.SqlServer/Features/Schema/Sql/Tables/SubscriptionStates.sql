@@ -4,7 +4,7 @@ GO
 -- the activation watermark (only later transactions are matched), the event counter, and the per-subscription delivery lease.
 CREATE TABLE dbo.SubscriptionStates
   (
-     SubscriptionId          varchar(64)   COLLATE Latin1_General_100_CS_AS NOT NULL
+     SubscriptionId          varchar(128)  COLLATE Latin1_General_100_CS_AS NOT NULL
     ,ContentHash             varchar(64)   NULL
     ,GrantJson               nvarchar(max) NULL
     ,ActivationTransactionId bigint        NULL

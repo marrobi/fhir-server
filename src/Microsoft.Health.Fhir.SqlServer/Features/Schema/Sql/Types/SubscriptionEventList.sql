@@ -2,11 +2,11 @@
 GO
 CREATE TYPE dbo.SubscriptionEventList AS TABLE
 (
-     SubscriptionId      varchar(64)  COLLATE Latin1_General_100_CS_AS NOT NULL
+     SubscriptionId      varchar(128)  COLLATE Latin1_General_100_CS_AS NOT NULL
     ,TransactionId       bigint       NOT NULL
     ,ResourceTypeId      smallint     NOT NULL
     ,ResourceSurrogateId bigint       NOT NULL
-    ,ResourceId          varchar(64)  COLLATE Latin1_General_100_CS_AS NOT NULL
+    ,ResourceId          varchar(128)  COLLATE Latin1_General_100_CS_AS NOT NULL
     ,ResourceVersion     int          NOT NULL
     ,Interaction         tinyint      NOT NULL
     ,Status              tinyint      NOT NULL

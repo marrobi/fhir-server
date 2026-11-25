@@ -2,11 +2,11 @@ IF type_id('dbo.SubscriptionEventList') IS NULL
 BEGIN
   CREATE TYPE dbo.SubscriptionEventList AS TABLE
   (
-       SubscriptionId      varchar(64)  COLLATE Latin1_General_100_CS_AS NOT NULL
+       SubscriptionId      varchar(128)  COLLATE Latin1_General_100_CS_AS NOT NULL
       ,TransactionId       bigint       NOT NULL
       ,ResourceTypeId      smallint     NOT NULL
       ,ResourceSurrogateId bigint       NOT NULL
-      ,ResourceId          varchar(64)  COLLATE Latin1_General_100_CS_AS NOT NULL
+      ,ResourceId          varchar(128)  COLLATE Latin1_General_100_CS_AS NOT NULL
       ,ResourceVersion     int          NOT NULL
       ,Interaction         tinyint      NOT NULL
       ,Status              tinyint      NOT NULL
@@ -24,7 +24,7 @@ IF object_id('dbo.SubscriptionStates') IS NULL
 BEGIN
   CREATE TABLE dbo.SubscriptionStates
     (
-       SubscriptionId          varchar(64)   COLLATE Latin1_General_100_CS_AS NOT NULL
+       SubscriptionId          varchar(128)  COLLATE Latin1_General_100_CS_AS NOT NULL
       ,ContentHash             varchar(64)   NULL
       ,GrantJson               nvarchar(max) NULL
       ,ActivationTransactionId bigint        NULL
@@ -48,12 +48,12 @@ IF object_id('dbo.SubscriptionEvents') IS NULL
 BEGIN
   CREATE TABLE dbo.SubscriptionEvents
     (
-       SubscriptionId      varchar(64)    COLLATE Latin1_General_100_CS_AS NOT NULL
+       SubscriptionId      varchar(128)  COLLATE Latin1_General_100_CS_AS NOT NULL
       ,EventNumber         bigint         NOT NULL
       ,TransactionId       bigint         NOT NULL
       ,ResourceTypeId      smallint       NOT NULL
       ,ResourceSurrogateId bigint         NOT NULL
-      ,ResourceId          varchar(64)    COLLATE Latin1_General_100_CS_AS NOT NULL
+      ,ResourceId          varchar(128)  COLLATE Latin1_General_100_CS_AS NOT NULL
       ,ResourceVersion     int            NOT NULL
       ,Interaction         tinyint        NOT NULL
       ,Status              tinyint        NOT NULL
@@ -73,15 +73,15 @@ IF NOT EXISTS (SELECT * FROM sys.indexes WHERE object_id = object_id('dbo.Subscr
 GO
 
 IF NOT EXISTS (SELECT * FROM sys.indexes WHERE object_id = object_id('dbo.SubscriptionEvents') AND name = 'IX_SubscriptionEvents_SubscriptionId_Status_EventNumber')
-  CREATE INDEX IX_SubscriptionEvents_SubscriptionId_Status_EventNumber ON dbo.SubscriptionEvents (SubscriptionId, Status, EventNumber)
+  CREATE INDEX IX_SubscriptionEvents_SubscriptionId_Status_EventNumber ON dbo.SubscriptionEvents (SubscriptionId, Status, EventNumber) INCLUDE (NextAttemptDate)
 GO
 
 IF NOT EXISTS (SELECT * FROM sys.indexes WHERE object_id = object_id('dbo.SubscriptionEvents') AND name = 'IX_SubscriptionEvents_StatusDate')
-  CREATE INDEX IX_SubscriptionEvents_StatusDate ON dbo.SubscriptionEvents (StatusDate) INCLUDE (Status)
+  CREATE INDEX IX_SubscriptionEvents_StatusDate ON dbo.SubscriptionEvents (StatusDate) WHERE Status <> 0
 GO
 
 -- Acquires or renews the per-subscription lease that makes lifecycle and delivery work single-flight.
-CREATE OR ALTER PROCEDURE dbo.AcquireSubscriptionLease @SubscriptionId varchar(64), @Worker varchar(100), @LeasePeriodSec int, @IsAcquired bit = 0 OUT
+CREATE OR ALTER PROCEDURE dbo.AcquireSubscriptionLease @SubscriptionId varchar(128), @Worker varchar(100), @LeasePeriodSec int, @IsAcquired bit = 0 OUT
 AS
 set nocount on
 set xact_abort on
@@ -124,7 +124,7 @@ GO
 -- Sets the activation watermark to the current transaction visibility if it is not already set, and makes retained
 -- pending events due again. Only transactions after the watermark are matched for the subscription. Each activation
 -- increments Subscriptions.ActivationVersion, which the event pump checks so it never commits events matched without it.
-CREATE OR ALTER PROCEDURE dbo.ActivateSubscription @SubscriptionId varchar(64), @ActivationTransactionId bigint = NULL OUT
+CREATE OR ALTER PROCEDURE dbo.ActivateSubscription @SubscriptionId varchar(128), @ActivationTransactionId bigint = NULL OUT
 AS
 set nocount on
 set xact_abort on
@@ -134,14 +134,15 @@ DECLARE @SP varchar(100) = object_name(@@procid)
        ,@Visibility bigint
 
 BEGIN TRY
-  SET @Visibility = isnull((SELECT TOP 1 SurrogateIdRangeFirstValue FROM dbo.Transactions WHERE IsVisible = 1 ORDER BY SurrogateIdRangeFirstValue DESC),-1)
-
   BEGIN TRANSACTION
 
   -- The counter is locked first, in the same order as EnqueueSubscriptionEvents (counter, state, events), to avoid deadlocks.
   UPDATE dbo.Parameters WITH (UPDLOCK, HOLDLOCK) SET Bigint = isnull(Bigint, 0) + 1, UpdatedDate = getUTCdate() WHERE Id = 'Subscriptions.ActivationVersion'
   IF @@rowcount = 0
     INSERT INTO dbo.Parameters (Id, Bigint, UpdatedDate) SELECT 'Subscriptions.ActivationVersion', 1, getUTCdate()
+
+  -- Read after the counter is locked, so a pump commit cannot move the cursor past the watermark without seeing this activation.
+  EXECUTE dbo.MergeResourcesGetTransactionVisibility @Visibility OUT
 
   UPDATE dbo.SubscriptionStates
     SET ActivationTransactionId = isnull(ActivationTransactionId, @Visibility)
@@ -168,23 +169,26 @@ END CATCH
 GO
 
 -- Removes delivered, unevaluable and not-authorized events older than the retention period. Pending events are kept.
-CREATE OR ALTER PROCEDURE dbo.CleanupSubscriptionEvents @RetentionDays int, @DeletedRows int = 0 OUT
+-- Deletes in batches below the lock escalation threshold, and stops starting batches after @MaxSeconds when given.
+CREATE OR ALTER PROCEDURE dbo.CleanupSubscriptionEvents @RetentionDays int, @MaxSeconds int = NULL, @DeletedRows int = 0 OUT, @IsComplete bit = 0 OUT
 AS
 set nocount on
 DECLARE @SP varchar(100) = object_name(@@procid)
-       ,@Mode varchar(200) = 'R='+isnull(convert(varchar,@RetentionDays),'NULL')
+       ,@Mode varchar(200) = 'R='+isnull(convert(varchar,@RetentionDays),'NULL')+' MS='+isnull(convert(varchar,@MaxSeconds),'NULL')
        ,@st datetime = getUTCdate()
        ,@Cutoff datetime = dateadd(day, -@RetentionDays, getUTCdate())
        ,@Rows int = 1
 
 BEGIN TRY
   SET @DeletedRows = 0
-  WHILE @Rows > 0
+  SET @IsComplete = 0
+  WHILE @Rows > 0 AND (@MaxSeconds IS NULL OR datediff(second, @st, getUTCdate()) < @MaxSeconds)
   BEGIN
-    DELETE TOP (10000) FROM dbo.SubscriptionEvents WHERE StatusDate < @Cutoff AND Status <> 0
+    DELETE TOP (4000) FROM dbo.SubscriptionEvents WHERE StatusDate < @Cutoff AND Status <> 0
     SET @Rows = @@rowcount
     SET @DeletedRows += @Rows
   END
+  SET @IsComplete = CASE WHEN @Rows = 0 THEN 1 ELSE 0 END
 
   EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Rows=@DeletedRows
 END TRY
@@ -197,7 +201,7 @@ GO
 
 -- Clears the activation watermark. With @RevokeGrant = 1 (off, entered-in-error or ended) the grant is removed too, so the
 -- subscription cannot be activated again without an authorized API write, and its pending events are marked not authorized.
-CREATE OR ALTER PROCEDURE dbo.DeactivateSubscription @SubscriptionId varchar(64), @RevokeGrant bit = 0
+CREATE OR ALTER PROCEDURE dbo.DeactivateSubscription @SubscriptionId varchar(128), @RevokeGrant bit = 0
 AS
 set nocount on
 set xact_abort on
@@ -208,6 +212,7 @@ DECLARE @SP varchar(100) = object_name(@@procid)
 BEGIN TRY
   BEGIN TRANSACTION
 
+  -- The state row is updated, and so locked, before the events, in the same order as EnqueueSubscriptionEvents.
   UPDATE dbo.SubscriptionStates
     SET ActivationTransactionId = NULL
        ,ContentHash = CASE WHEN @RevokeGrant = 1 THEN NULL ELSE ContentHash END
@@ -230,30 +235,37 @@ BEGIN CATCH
 END CATCH
 GO
 
-CREATE OR ALTER PROCEDURE dbo.DeleteSubscriptionState @SubscriptionId varchar(64)
+CREATE OR ALTER PROCEDURE dbo.DeleteSubscriptionState @SubscriptionId varchar(128)
 AS
 set nocount on
-set xact_abort on
 DECLARE @SP varchar(100) = object_name(@@procid)
        ,@Mode varchar(200) = 'S='+isnull(@SubscriptionId,'NULL')
        ,@st datetime = getUTCdate()
        ,@Rows int = 0
+       ,@Batch int
 
 BEGIN TRY
-  BEGIN TRANSACTION
+  -- Deactivate first, so no event can be enqueued or delivered while the events are removed.
+  UPDATE dbo.SubscriptionStates
+    SET ActivationTransactionId = NULL, ContentHash = NULL, GrantJson = NULL, UpdatedDate = getUTCdate()
+    WHERE SubscriptionId = @SubscriptionId
 
-  DELETE FROM dbo.SubscriptionEvents WHERE SubscriptionId = @SubscriptionId
-  SET @Rows += @@rowcount
+  -- A subscription can retain many events. Batches below the lock escalation threshold keep other subscriptions' enqueue and
+  -- delivery running. If this stops part way, the state row remains, and delivery calls this again for the deleted subscription.
+  WHILE 1 = 1
+  BEGIN
+    DELETE TOP (4000) FROM dbo.SubscriptionEvents WHERE SubscriptionId = @SubscriptionId
+    SET @Batch = @@rowcount
+    IF @Batch = 0 BREAK
+    SET @Rows += @Batch
+  END
 
   DELETE FROM dbo.SubscriptionStates WHERE SubscriptionId = @SubscriptionId
   SET @Rows += @@rowcount
 
-  COMMIT TRANSACTION
-
   EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Rows=@Rows
 END TRY
 BEGIN CATCH
-  IF @@trancount > 0 ROLLBACK TRANSACTION
   IF error_number() = 1750 THROW -- Real error is before 1750, cannot trap in SQL.
   EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='Error';
   THROW
@@ -279,11 +291,11 @@ DECLARE @SP varchar(100) = object_name(@@procid)
 BEGIN TRY
   DECLARE @New TABLE
     (
-       SubscriptionId      varchar(64)  COLLATE Latin1_General_100_CS_AS NOT NULL
+       SubscriptionId      varchar(128)  COLLATE Latin1_General_100_CS_AS NOT NULL
       ,TransactionId       bigint       NOT NULL
       ,ResourceTypeId      smallint     NOT NULL
       ,ResourceSurrogateId bigint       NOT NULL
-      ,ResourceId          varchar(64)  COLLATE Latin1_General_100_CS_AS NOT NULL
+      ,ResourceId          varchar(128)  COLLATE Latin1_General_100_CS_AS NOT NULL
       ,ResourceVersion     int          NOT NULL
       ,Interaction         tinyint      NOT NULL
       ,Status              tinyint      NOT NULL
@@ -291,7 +303,7 @@ BEGIN TRY
       ,Ordinal             int          NOT NULL
        PRIMARY KEY (SubscriptionId, Ordinal)
     )
-  DECLARE @Base TABLE (SubscriptionId varchar(64) COLLATE Latin1_General_100_CS_AS NOT NULL PRIMARY KEY, BaseNumber bigint NOT NULL)
+  DECLARE @Base TABLE (SubscriptionId varchar(128) COLLATE Latin1_General_100_CS_AS NOT NULL PRIMARY KEY, BaseNumber bigint NOT NULL)
 
   SET @IsStale = 0
 
@@ -349,7 +361,7 @@ BEGIN CATCH
 END CATCH
 GO
 
-CREATE OR ALTER PROCEDURE dbo.GetSubscriptionEventCounts @SubscriptionId varchar(64)
+CREATE OR ALTER PROCEDURE dbo.GetSubscriptionEventCounts @SubscriptionId varchar(128)
 AS
 set nocount on
 DECLARE @SP varchar(100) = object_name(@@procid)
@@ -361,6 +373,7 @@ BEGIN TRY
         ,Unevaluable = isnull(sum(CASE WHEN Status = 2 THEN 1 ELSE 0 END),0)
     FROM dbo.SubscriptionEvents
     WHERE SubscriptionId = @SubscriptionId
+      AND Status IN (0, 2)
 
   EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Rows=@@rowcount
 END TRY
@@ -372,7 +385,7 @@ END CATCH
 GO
 
 -- Returns the oldest events of a subscription with the given status, in event-number order.
-CREATE OR ALTER PROCEDURE dbo.GetSubscriptionEvents @SubscriptionId varchar(64), @Status tinyint = 0, @MaxCount int = 1
+CREATE OR ALTER PROCEDURE dbo.GetSubscriptionEvents @SubscriptionId varchar(128), @Status tinyint = 0, @MaxCount int = 1
 AS
 set nocount on
 DECLARE @SP varchar(100) = object_name(@@procid)
@@ -406,7 +419,7 @@ BEGIN CATCH
 END CATCH
 GO
 
-CREATE OR ALTER PROCEDURE dbo.GetSubscriptionStates @SubscriptionId varchar(64) = NULL
+CREATE OR ALTER PROCEDURE dbo.GetSubscriptionStates @SubscriptionId varchar(128) = NULL
 AS
 set nocount on
 DECLARE @SP varchar(100) = object_name(@@procid)
@@ -441,12 +454,13 @@ DECLARE @SP varchar(100) = object_name(@@procid)
        ,@st datetime = getUTCdate()
 
 BEGIN TRY
-  -- One probe per activated subscription on IX_SubscriptionEvents_SubscriptionId_Status_EventNumber. Pending events after
-  -- the first batch keep their insert time, so the probe stops at the first unattempted event instead of reading the backlog.
+  -- Delivery sends pending events in event-number order and backs off on the oldest one, so only the oldest pending event
+  -- decides whether a subscription is due. One seek per activated subscription on IX_SubscriptionEvents_SubscriptionId_Status_EventNumber.
   SELECT S.SubscriptionId
     FROM dbo.SubscriptionStates S
+         CROSS APPLY (SELECT TOP 1 E.NextAttemptDate FROM dbo.SubscriptionEvents E WHERE E.SubscriptionId = S.SubscriptionId AND E.Status = 0 ORDER BY E.EventNumber) O
     WHERE S.ActivationTransactionId IS NOT NULL
-      AND EXISTS (SELECT * FROM dbo.SubscriptionEvents E WHERE E.SubscriptionId = S.SubscriptionId AND E.Status = 0 AND E.NextAttemptDate <= getUTCdate())
+      AND O.NextAttemptDate <= getUTCdate()
 
   EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Rows=@@rowcount
 END TRY
@@ -457,7 +471,7 @@ BEGIN CATCH
 END CATCH
 GO
 
-CREATE OR ALTER PROCEDURE dbo.ReleaseSubscriptionLease @SubscriptionId varchar(64), @Worker varchar(100)
+CREATE OR ALTER PROCEDURE dbo.ReleaseSubscriptionLease @SubscriptionId varchar(128), @Worker varchar(100)
 AS
 set nocount on
 DECLARE @SP varchar(100) = object_name(@@procid)
@@ -479,7 +493,7 @@ GO
 -- Stores the activation grant of a subscription. A different content hash clears the activation watermark, so the
 -- subscription is not matched again until it completes a new handshake. Pending events matched under the previous content
 -- (filters, endpoint, authorization) are marked not authorized, so they are never sent under the new content.
-CREATE OR ALTER PROCEDURE dbo.SaveSubscriptionGrant @SubscriptionId varchar(64), @ContentHash varchar(64), @GrantJson nvarchar(max)
+CREATE OR ALTER PROCEDURE dbo.SaveSubscriptionGrant @SubscriptionId varchar(128), @ContentHash varchar(64), @GrantJson nvarchar(max)
 AS
 set nocount on
 set xact_abort on
@@ -523,7 +537,7 @@ END CATCH
 GO
 
 -- Stores the latest server-reported error of a subscription, reported by $status. NULL clears it.
-CREATE OR ALTER PROCEDURE dbo.SetSubscriptionError @SubscriptionId varchar(64), @ErrorText nvarchar(1000) = NULL
+CREATE OR ALTER PROCEDURE dbo.SetSubscriptionError @SubscriptionId varchar(128), @ErrorText nvarchar(1000) = NULL
 AS
 set nocount on
 DECLARE @SP varchar(100) = object_name(@@procid)
@@ -542,7 +556,7 @@ BEGIN CATCH
 END CATCH
 GO
 
-CREATE OR ALTER PROCEDURE dbo.SetSubscriptionLastNotification @SubscriptionId varchar(64), @LastNotificationDate datetime
+CREATE OR ALTER PROCEDURE dbo.SetSubscriptionLastNotification @SubscriptionId varchar(128), @LastNotificationDate datetime
 AS
 set nocount on
 DECLARE @SP varchar(100) = object_name(@@procid)
@@ -562,7 +576,7 @@ END CATCH
 GO
 
 -- Sets the status of events, or records a failed delivery attempt when @IncrementAttempts = 1.
-CREATE OR ALTER PROCEDURE dbo.UpdateSubscriptionEvents @SubscriptionId varchar(64), @EventNumbers dbo.BigintList READONLY, @Status tinyint = NULL, @IncrementAttempts bit = 0, @NextAttemptDate datetime = NULL, @Error nvarchar(1000) = NULL
+CREATE OR ALTER PROCEDURE dbo.UpdateSubscriptionEvents @SubscriptionId varchar(128), @EventNumbers dbo.BigintList READONLY, @Status tinyint = NULL, @IncrementAttempts bit = 0, @NextAttemptDate datetime = NULL, @Error nvarchar(1000) = NULL
 AS
 set nocount on
 DECLARE @SP varchar(100) = object_name(@@procid)
@@ -579,6 +593,56 @@ BEGIN TRY
     FROM dbo.SubscriptionEvents E
          JOIN @EventNumbers N ON N.Id = E.EventNumber
     WHERE E.SubscriptionId = @SubscriptionId
+
+  EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Rows=@@rowcount
+END TRY
+BEGIN CATCH
+  IF error_number() = 1750 THROW -- Real error is before 1750, cannot trap in SQL.
+  EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='Error';
+  THROW
+END CATCH
+GO
+
+-- Returns every resource version written by the transactions in a range, including history and invisible versions, with the
+-- transaction that wrote it. The subscription event pump reads a page of transactions with one seek per resource type on
+-- IX_ResourceTypeId_TransactionId, instead of one seek per resource type for each transaction.
+CREATE OR ALTER PROCEDURE dbo.GetResourcesByTransactionIdRange @FirstTransactionId bigint, @LastTransactionId bigint
+AS
+set nocount on
+DECLARE @SP varchar(100) = object_name(@@procid)
+       ,@Mode varchar(100) = 'F='+convert(varchar,@FirstTransactionId)+' L='+convert(varchar,@LastTransactionId)
+       ,@st datetime = getUTCdate()
+       ,@DummyTop bigint = 9223372036854775807
+       ,@TypeId smallint
+
+BEGIN TRY
+  DECLARE @Types TABLE (TypeId smallint PRIMARY KEY, Name varchar(100))
+  INSERT INTO @Types EXECUTE dbo.GetUsedResourceTypes
+
+  DECLARE @Keys TABLE (TypeId smallint, SurrogateId bigint, TransactionId bigint PRIMARY KEY (TypeId, SurrogateId))
+  WHILE EXISTS (SELECT * FROM @Types)
+  BEGIN
+    SET @TypeId = (SELECT TOP 1 TypeId FROM @Types ORDER BY TypeId)
+
+    INSERT INTO @Keys SELECT @TypeId, ResourceSurrogateId, TransactionId FROM dbo.Resource WHERE ResourceTypeId = @TypeId AND TransactionId BETWEEN @FirstTransactionId AND @LastTransactionId
+
+    DELETE FROM @Types WHERE TypeId = @TypeId
+  END
+
+  SELECT B.ResourceTypeId
+        ,B.ResourceId
+        ,B.ResourceSurrogateId
+        ,B.Version
+        ,B.IsDeleted
+        ,B.IsHistory
+        ,B.RawResource
+        ,B.IsRawResourceMetaSet
+        ,B.SearchParamHash
+        ,B.RequestMethod
+        ,A.TransactionId
+    FROM (SELECT TOP (@DummyTop) * FROM @Keys) A
+         JOIN dbo.Resource B ON B.ResourceTypeId = A.TypeId AND B.ResourceSurrogateId = A.SurrogateId
+    OPTION (MAXDOP 1, OPTIMIZE FOR (@DummyTop = 1))
 
   EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Rows=@@rowcount
 END TRY

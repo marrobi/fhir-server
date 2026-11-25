@@ -5,12 +5,12 @@ GO
 -- Status: 0 = pending, 1 = delivered, 2 = unevaluable, 3 = not authorized at delivery.
 CREATE TABLE dbo.SubscriptionEvents
   (
-     SubscriptionId      varchar(64)    COLLATE Latin1_General_100_CS_AS NOT NULL
+     SubscriptionId      varchar(128)  COLLATE Latin1_General_100_CS_AS NOT NULL
     ,EventNumber         bigint         NOT NULL
     ,TransactionId       bigint         NOT NULL
     ,ResourceTypeId      smallint       NOT NULL
     ,ResourceSurrogateId bigint         NOT NULL
-    ,ResourceId          varchar(64)    COLLATE Latin1_General_100_CS_AS NOT NULL
+    ,ResourceId          varchar(128)  COLLATE Latin1_General_100_CS_AS NOT NULL
     ,ResourceVersion     int            NOT NULL
     ,Interaction         tinyint        NOT NULL
     ,Status              tinyint        NOT NULL
@@ -25,7 +25,7 @@ CREATE TABLE dbo.SubscriptionEvents
 GO
 CREATE UNIQUE INDEX IXU_SubscriptionEvents_SubscriptionId_TransactionId_ResourceTypeId_ResourceSurrogateId ON dbo.SubscriptionEvents (SubscriptionId, TransactionId, ResourceTypeId, ResourceSurrogateId)
 GO
-CREATE INDEX IX_SubscriptionEvents_SubscriptionId_Status_EventNumber ON dbo.SubscriptionEvents (SubscriptionId, Status, EventNumber)
+CREATE INDEX IX_SubscriptionEvents_SubscriptionId_Status_EventNumber ON dbo.SubscriptionEvents (SubscriptionId, Status, EventNumber) INCLUDE (NextAttemptDate)
 GO
-CREATE INDEX IX_SubscriptionEvents_StatusDate ON dbo.SubscriptionEvents (StatusDate) INCLUDE (Status)
+CREATE INDEX IX_SubscriptionEvents_StatusDate ON dbo.SubscriptionEvents (StatusDate) WHERE Status <> 0
 GO

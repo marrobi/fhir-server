@@ -1,7 +1,7 @@
 --DROP PROCEDURE dbo.SetSubscriptionError
 GO
 -- Stores the latest server-reported error of a subscription, reported by $status. NULL clears it.
-CREATE PROCEDURE dbo.SetSubscriptionError @SubscriptionId varchar(64), @ErrorText nvarchar(1000) = NULL
+CREATE PROCEDURE dbo.SetSubscriptionError @SubscriptionId varchar(128), @ErrorText nvarchar(1000) = NULL
 AS
 set nocount on
 DECLARE @SP varchar(100) = object_name(@@procid)

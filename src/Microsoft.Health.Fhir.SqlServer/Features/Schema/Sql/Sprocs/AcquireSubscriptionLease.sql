@@ -1,7 +1,7 @@
 --DROP PROCEDURE dbo.AcquireSubscriptionLease
 GO
 -- Acquires or renews the per-subscription lease that makes lifecycle and delivery work single-flight.
-CREATE PROCEDURE dbo.AcquireSubscriptionLease @SubscriptionId varchar(64), @Worker varchar(100), @LeasePeriodSec int, @IsAcquired bit = 0 OUT
+CREATE PROCEDURE dbo.AcquireSubscriptionLease @SubscriptionId varchar(128), @Worker varchar(100), @LeasePeriodSec int, @IsAcquired bit = 0 OUT
 AS
 set nocount on
 set xact_abort on

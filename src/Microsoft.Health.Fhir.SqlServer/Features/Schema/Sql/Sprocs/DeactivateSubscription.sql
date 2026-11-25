@@ -2,7 +2,7 @@
 GO
 -- Clears the activation watermark. With @RevokeGrant = 1 (off, entered-in-error or ended) the grant is removed too, so the
 -- subscription cannot be activated again without an authorized API write, and its pending events are marked not authorized.
-CREATE PROCEDURE dbo.DeactivateSubscription @SubscriptionId varchar(64), @RevokeGrant bit = 0
+CREATE PROCEDURE dbo.DeactivateSubscription @SubscriptionId varchar(128), @RevokeGrant bit = 0
 AS
 set nocount on
 set xact_abort on
@@ -13,6 +13,7 @@ DECLARE @SP varchar(100) = object_name(@@procid)
 BEGIN TRY
   BEGIN TRANSACTION
 
+  -- The state row is updated, and so locked, before the events, in the same order as EnqueueSubscriptionEvents.
   UPDATE dbo.SubscriptionStates
     SET ActivationTransactionId = NULL
        ,ContentHash = CASE WHEN @RevokeGrant = 1 THEN NULL ELSE ContentHash END

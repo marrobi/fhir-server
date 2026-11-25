@@ -8,12 +8,13 @@ DECLARE @SP varchar(100) = object_name(@@procid)
        ,@st datetime = getUTCdate()
 
 BEGIN TRY
-  -- One probe per activated subscription on IX_SubscriptionEvents_SubscriptionId_Status_EventNumber. Pending events after
-  -- the first batch keep their insert time, so the probe stops at the first unattempted event instead of reading the backlog.
+  -- Delivery sends pending events in event-number order and backs off on the oldest one, so only the oldest pending event
+  -- decides whether a subscription is due. One seek per activated subscription on IX_SubscriptionEvents_SubscriptionId_Status_EventNumber.
   SELECT S.SubscriptionId
     FROM dbo.SubscriptionStates S
+         CROSS APPLY (SELECT TOP 1 E.NextAttemptDate FROM dbo.SubscriptionEvents E WHERE E.SubscriptionId = S.SubscriptionId AND E.Status = 0 ORDER BY E.EventNumber) O
     WHERE S.ActivationTransactionId IS NOT NULL
-      AND EXISTS (SELECT * FROM dbo.SubscriptionEvents E WHERE E.SubscriptionId = S.SubscriptionId AND E.Status = 0 AND E.NextAttemptDate <= getUTCdate())
+      AND O.NextAttemptDate <= getUTCdate()
 
   EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Rows=@@rowcount
 END TRY

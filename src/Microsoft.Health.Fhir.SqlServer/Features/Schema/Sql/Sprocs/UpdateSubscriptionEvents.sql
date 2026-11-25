@@ -1,7 +1,7 @@
 --DROP PROCEDURE dbo.UpdateSubscriptionEvents
 GO
 -- Sets the status of events, or records a failed delivery attempt when @IncrementAttempts = 1.
-CREATE PROCEDURE dbo.UpdateSubscriptionEvents @SubscriptionId varchar(64), @EventNumbers dbo.BigintList READONLY, @Status tinyint = NULL, @IncrementAttempts bit = 0, @NextAttemptDate datetime = NULL, @Error nvarchar(1000) = NULL
+CREATE PROCEDURE dbo.UpdateSubscriptionEvents @SubscriptionId varchar(128), @EventNumbers dbo.BigintList READONLY, @Status tinyint = NULL, @IncrementAttempts bit = 0, @NextAttemptDate datetime = NULL, @Error nvarchar(1000) = NULL
 AS
 set nocount on
 DECLARE @SP varchar(100) = object_name(@@procid)

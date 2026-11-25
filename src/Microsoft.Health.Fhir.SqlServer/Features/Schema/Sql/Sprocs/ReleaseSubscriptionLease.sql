@@ -1,6 +1,6 @@
 --DROP PROCEDURE dbo.ReleaseSubscriptionLease
 GO
-CREATE PROCEDURE dbo.ReleaseSubscriptionLease @SubscriptionId varchar(64), @Worker varchar(100)
+CREATE PROCEDURE dbo.ReleaseSubscriptionLease @SubscriptionId varchar(128), @Worker varchar(100)
 AS
 set nocount on
 DECLARE @SP varchar(100) = object_name(@@procid)

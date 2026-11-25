@@ -1,6 +1,6 @@
 --DROP PROCEDURE dbo.GetSubscriptionEventCounts
 GO
-CREATE PROCEDURE dbo.GetSubscriptionEventCounts @SubscriptionId varchar(64)
+CREATE PROCEDURE dbo.GetSubscriptionEventCounts @SubscriptionId varchar(128)
 AS
 set nocount on
 DECLARE @SP varchar(100) = object_name(@@procid)
@@ -12,6 +12,7 @@ BEGIN TRY
         ,Unevaluable = isnull(sum(CASE WHEN Status = 2 THEN 1 ELSE 0 END),0)
     FROM dbo.SubscriptionEvents
     WHERE SubscriptionId = @SubscriptionId
+      AND Status IN (0, 2)
 
   EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Rows=@@rowcount
 END TRY
