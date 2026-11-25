@@ -569,7 +569,8 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
             }
         }
 
-#if R5
+#if !R4B
+        // R4B topics cannot declare comparators. R5 states the comparator separately; R4 Backport filters carry it as a value prefix.
         [Theory]
         [InlineData("gt", HttpStatusCode.Created)]
         [InlineData("ge", HttpStatusCode.BadRequest)]
@@ -577,8 +578,12 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
         {
             Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "Requires an in-proc server with subscriptions enabled.");
             string topicUrl = await CreateTopicAsync([new TopicTrigger("Encounter", ["update"])], [new TopicFilter("Encounter", "date") { Comparators = ["gt", "lt"] }]);
+#if R5
             JObject subscription = JObject.Parse(SubscriptionResources.Subscription(topicUrl, Webhook.BaseUrl + NewPath(), filter: "Encounter?date=2026-01-01"));
             subscription["filterBy"][0]["comparator"] = comparator;
+#else
+            JObject subscription = JObject.Parse(SubscriptionResources.Subscription(topicUrl, Webhook.BaseUrl + NewPath(), filter: $"Encounter?date={comparator}2026-01-01"));
+#endif
 
             (HttpStatusCode code, JObject body) = await SendAsync(HttpMethod.Post, "Subscription", subscription.ToString());
 

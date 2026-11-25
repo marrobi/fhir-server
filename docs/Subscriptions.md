@@ -11,7 +11,7 @@ The feature is **off by default** and needs the **SQL Server** data store with s
 | FHIR versions | R4 (Backport), R4B (Backport), R5 | STU3 |
 | Topics | Defined through the API: `SubscriptionTopic` on R4B and R5; on R4 a `Basic` resource with code `http://hl7.org/fhir/fhir-types#SubscriptionTopic` and cross-version topic extensions, laid out as HAPI FHIR does (see [R4 topic profile](#r4-topic-profile)) | Event triggers, topics on `Subscription`, server-only topics |
 | Triggers | `resourceTrigger` with `supportedInteraction` (`create`, `update`, `delete`), `queryCriteria` (`previous`, `current`, `resultForCreate`, `resultForDelete`, `requireBoth`) and `fhirPathCriteria` (with `%previous` and `%current`) | Chained, reverse-chained (`_has`), composite, terminology (`:in`, `:below` …) and result parameters; these are rejected when the topic is written |
-| Filters | `canFilterBy` on the topic; `filterBy` (R5) or `_criteria` filter extension (Backport) on the subscription, evaluated in memory with the same limits as criteria | |
+| Filters | `canFilterBy` on the topic; `filterBy` (R5) or `_criteria` filter extension (Backport) on the subscription, evaluated in memory with the same limits as criteria. Each filter must use a parameter, modifier and comparator the topic allows; on Backport a comparator is the search prefix of a date, number or quantity value (for example `date=gt2026-01-01`) | |
 | Subscriptions | Topic-based only (`criteria` is the topic canonical on R4) | Classic R4 criteria-based subscriptions (rejected with 400) |
 | Channels | `rest-hook` | `websocket`, `email`, `message` |
 | Payload | `empty`, `id-only` (default), `full-resource`; `application/fhir+json` or `application/fhir+xml` | |

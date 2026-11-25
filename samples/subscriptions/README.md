@@ -40,7 +40,7 @@ It reads the server's FHIR version and writes resources in that version's shape,
 exactly which changes are notified: `supportedInteraction` (including `delete`), `queryCriteria` with `requireBoth`,
 `resultForCreate` and `resultForDelete`, `fhirPathCriteria` with `%previous` and `%current`, several triggers with a
 filter per resource type, combined `canFilterBy` filters with modifiers, and the topics and filters that are rejected
-because they cannot be evaluated in memory. On R5 it also checks that filter comparators must be allowed by the topic.
+because they cannot be evaluated in memory. On R4 and R5 it also checks that filter comparators must be allowed by the topic (R4B topics cannot declare them).
 
 The receiver replies to notifications with an empty `Bundle`, so it can also be used with HAPI FHIR, which retries
 deliveries whose response it cannot parse as a Bundle.

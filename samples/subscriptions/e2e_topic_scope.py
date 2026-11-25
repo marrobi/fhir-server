@@ -13,7 +13,8 @@ subscription, makes changes, and checks exactly which changes were notified:
   5. Several triggers on different resource types, with a subscription filter per type
   6. canFilterBy / subscription filters: parameters are ANDed, allowed modifiers are honoured
   7. Topics and subscriptions the server cannot evaluate in memory are rejected with 400
-  8. R5 only: a filter comparator must be one the topic's canFilterBy allows
+  8. R4 and R5: a filter comparator must be one the topic's canFilterBy allows (R4 writes it as a value prefix;
+     R4B topics cannot declare comparators)
 
 Usage: python e2e_topic_scope.py [FHIR base URL] [webhook base URL as seen by the server] [webhook base URL as seen by this script]
 """
@@ -360,12 +361,14 @@ def rejections():
 
 
 def comparators():
-    print("- R5: filter comparators must be allowed by canFilterBy")
+    print("- Filter comparators must be allowed by canFilterBy")
     url = f"http://example.org/fhir/SubscriptionTopic/scope-{new_id()[:8]}"
-    _, created = call("POST", f"{FHIR}/SubscriptionTopic", topic(url, [trigger("Encounter", ["update"])], [can_filter_by("Encounter", "date", comparators=["gt", "lt"])]), expect=201)
+    _, created = call("POST", f"{FHIR}/{TOPIC_TYPE}", topic(url, [trigger("Encounter", ["update"])], [can_filter_by("Encounter", "date", comparators=["gt", "lt"])]), expect=201)
     try:
         def date_filter(comparator):
-            return subscription(url, "/never", [{"resourceType": "Encounter", "filterParameter": "date", "comparator": comparator, "value": "2026-01-01"}])
+            if VERSION == "R5":
+                return subscription(url, "/never", [{"resourceType": "Encounter", "filterParameter": "date", "comparator": comparator, "value": "2026-01-01"}])
+            return subscription(url, "/never", [f"Encounter?date={comparator}2026-01-01"])
 
         _, sub = call("POST", f"{FHIR}/Subscription", date_filter("gt"), expect=201)
         call("DELETE", f"{FHIR}/Subscription/{sub['id']}")
@@ -373,14 +376,14 @@ def comparators():
         call("POST", f"{FHIR}/Subscription", date_filter("ge"), expect=400)
         print("    subscription rejected: comparator ge is not allowed")
     finally:
-        call("DELETE", f"{FHIR}/SubscriptionTopic/{created['id']}")
+        call("DELETE", f"{FHIR}/{TOPIC_TYPE}/{created['id']}")
 
 
 def main():
     print(f"FHIR {VERSION} server at {FHIR}")
     call("DELETE", HOOK_LOCAL + "/notifications")
     checks = [interactions, require_both, either_criterion, fhirpath, several_triggers, combined_filters, rejections]
-    if VERSION == "R5":
+    if VERSION != "R4B":
         checks.append(comparators)
     for check in checks:
         check()

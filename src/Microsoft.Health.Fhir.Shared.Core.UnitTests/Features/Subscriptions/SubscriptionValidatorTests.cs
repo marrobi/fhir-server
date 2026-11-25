@@ -160,6 +160,33 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             Assert.Equal(accepted, errors.Count == 0);
         }
 
+        [Theory]
+        [InlineData("date", "gt2026-01-01", true)]
+        [InlineData("date", "ge2026-01-01", false)]
+        [InlineData("date", "2026-01-01", true)]
+        [InlineData("date", "eq2026-01-01", true)]
+        [InlineData("date", "gt2026-01-01,ge2026-06-01", false)]
+        [InlineData("length", "ge5", false)]
+        public void GivenABackportFilterWithAComparatorPrefix_WhenValidated_ThenThePrefixIsCheckedLikeAComparator(string parameter, string value, bool accepted)
+        {
+            // Backport filters are query strings, so the comparator arrives as a prefix of the value rather than as Comparator.
+            SubscriptionTopicInfo topic = Copy(ValidTopic(), canFilterBy: [new TopicCanFilterBy { Resource = "Encounter", FilterParameter = parameter, Comparators = ["gt", "lt"] }]);
+            SubscriptionInfo subscription = With(filters: [new SubscriptionFilter { ResourceType = "Encounter", FilterParameter = parameter, Value = value }]);
+
+            IReadOnlyList<string> errors = _validator.ValidateSubscription(subscription, topic);
+
+            Assert.Equal(accepted, errors.Count == 0);
+        }
+
+        [Fact]
+        public void GivenATokenFilterWhoseValueStartsWithComparatorLetters_WhenValidated_ThenItIsNotTreatedAsAComparator()
+        {
+            SubscriptionTopicInfo topic = Copy(ValidTopic(), canFilterBy: [new TopicCanFilterBy { Resource = "Encounter", FilterParameter = "status", Comparators = ["gt"] }]);
+            SubscriptionInfo subscription = With(filters: [new SubscriptionFilter { ResourceType = "Encounter", FilterParameter = "status", Value = "ge-custom" }]);
+
+            Assert.Empty(_validator.ValidateSubscription(subscription, topic));
+        }
+
         private static SubscriptionTopicInfo ValidTopic() => new()
         {
             Canonical = "http://example.org/topic/encounter",

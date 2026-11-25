@@ -9,9 +9,11 @@ using System.Globalization;
 using System.Linq;
 using System.Net.Http.Headers;
 using EnsureThat;
+using Hl7.Fhir.Utility;
 using Microsoft.Extensions.Options;
 using Microsoft.Health.Fhir.Core.Configs;
 using Microsoft.Health.Fhir.Core.Extensions;
+using Microsoft.Health.Fhir.Core.Features.Search.Expressions;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Channels;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
@@ -37,6 +39,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         };
 
         private static readonly HashSet<string> BaseResourceTypes = new(StringComparer.Ordinal) { "Resource", "DomainResource" };
+
+        private static readonly string[] ComparatorPrefixes = Enum.GetValues<SearchComparator>().Select(c => c.GetLiteral()).ToArray();
 
         private readonly InMemorySearchEvaluator _searchEvaluator;
         private readonly FhirPathCriteriaEvaluator _fhirPathEvaluator;
@@ -267,16 +271,18 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
                     continue;
                 }
 
-                if (!string.IsNullOrEmpty(filter.Comparator) && !string.Equals(filter.Comparator, "eq", StringComparison.Ordinal) &&
-                    !allowed.Any(c => c.Comparators.Count == 0 || c.Comparators.Contains(filter.Comparator, StringComparer.Ordinal)))
+                IReadOnlyList<string> types = filter.ResourceType != null
+                    ? [filter.ResourceType]
+                    : topic.ResourceTriggers.Select(t => SubscriptionMatcher.GetTypeName(t.Resource)).Where(t => !BaseResourceTypes.Contains(t)).Distinct().ToList();
+
+                string notAllowed = Comparators(filter, types)
+                    .FirstOrDefault(comparator => !string.Equals(comparator, "eq", StringComparison.Ordinal) &&
+                        !allowed.Any(c => c.Comparators.Count == 0 || c.Comparators.Contains(comparator, StringComparer.Ordinal)));
+                if (notAllowed != null)
                 {
-                    errors.Add(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionFilterComparatorNotAllowed, filter.Comparator, filter.FilterParameter));
+                    errors.Add(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionFilterComparatorNotAllowed, notAllowed, filter.FilterParameter));
                     continue;
                 }
-
-                IEnumerable<string> types = filter.ResourceType != null
-                    ? [filter.ResourceType]
-                    : topic.ResourceTriggers.Select(t => SubscriptionMatcher.GetTypeName(t.Resource)).Where(t => !BaseResourceTypes.Contains(t)).Distinct();
 
                 string lastError = null;
                 bool parsed = false;
@@ -297,6 +303,43 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
                 {
                     errors.Add(lastError ?? string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionFilterNotAllowedByTopic, filter.FilterParameter, topic.Canonical));
                 }
+            }
+        }
+
+        /// <summary>
+        /// Returns the comparators a filter uses. R5 states the comparator separately; Backport filters are search query strings,
+        /// where a date, number or quantity value may start with a comparator prefix (for example <c>ge2026-01-01</c>), as the search
+        /// parser reads it.
+        /// </summary>
+        private IEnumerable<string> Comparators(SubscriptionFilter filter, IReadOnlyList<string> resourceTypes)
+        {
+            if (!string.IsNullOrEmpty(filter.Comparator))
+            {
+                return [filter.Comparator];
+            }
+
+            if (!resourceTypes.Any(type => AcceptsComparators(type, filter.FilterParameter)))
+            {
+                return [];
+            }
+
+            return filter.Value.Split(',')
+                .Select(part => ComparatorPrefixes.FirstOrDefault(prefix => part.StartsWith(prefix, StringComparison.Ordinal)))
+                .Where(prefix => prefix != null)
+                .Distinct(StringComparer.Ordinal);
+        }
+
+        private bool AcceptsComparators(string resourceType, string code)
+        {
+            try
+            {
+                return _searchEvaluator.Parse(resourceType, [new KeyValuePair<string, string>(code + ":missing", "true")])
+                    .OfType<SearchParameterExpressionBase>()
+                    .Any(e => e.Parameter.Type is SearchParamType.Date or SearchParamType.Number or SearchParamType.Quantity);
+            }
+            catch (SubscriptionCriteriaException)
+            {
+                return false;
             }
         }
 

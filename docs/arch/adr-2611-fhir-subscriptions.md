@@ -26,12 +26,18 @@ Three earlier attempts (#4474, #4628, #5478) were closed with no public review r
 3. **One queued job per committed transaction (the prior prototype).** *(rejected)* Job overhead scales with write volume. Parallel jobs cannot advance a single cursor atomically. It also read only current rows, so earlier versions were dropped when a resource was updated again before matching ran.
 4. **Leased singleton pump over `Transactions`.** The pump pages from a cursor to the visibility watermark, matches the exact committed versions in memory, and commits the resulting events and the cursor in one SQL transaction. A per-subscription delivery queue then sends notifications. *(viable, preferred)* `Transactions` is written on every SQL write already, its visibility watermark gives a consistent order without new locks on writes, and its retention can be held back by the subscription cursor. Its main cost is head-of-line latency during long transactions.
 5. **Evaluate criteria with database queries** (chained parameters, `_has`, terminology). *(rejected)* It needs one query per event per subscription, which does not scale. Such criteria are rejected when the subscription or topic is created.
+6. **Match outside the server, consuming [Azure Health Data Services events](https://learn.microsoft.com/azure/healthcare-apis/events/events-overview) through Event Grid and Service Bus.** *(viable for the managed service only, not chosen)* A separate service receives the resource created, updated and deleted events through a Service Bus queue. It reads each version an event names, plus the version before it for `previous` criteria, matches in memory, and delivers notifications itself. It could reuse this design's in-memory evaluator and R4 topic conversion. It needs no change to the managed service. However:
+   - **Managed service only:** this server does not emit Event Grid events, so the option does not apply to it.
+   - **Additional services:** it needs an Event Grid subscription, a Service Bus queue, a compute host and a store for subscription state and events, each with its own deployment, monitoring and cost.
+   - **Weaker contract:** the service reads with its own identity, so authorization cannot use a snapshot of the subscriber's grant. It cannot provide `$status`, own `Subscription.status`, or validate topics and subscriptions when they are written unless a facade sits in front of the API.
+   - **Durability and order:** Service Bus keeps each event until the service completes it, which it does only after persisting the resulting events. Dead-lettering on Event Grid and Service Bus covers delivery failures. Unlike options 2 and 4, it cannot re-read events from the source once they are processed, and it must restore the order of versions itself. Coverage is limited to what the events cover; they are presumed to come from `ResourceChangeData`, so they share option 2's limits.
+   - **Search parameters:** custom search parameters must be loaded into the external evaluator.
 
 **Subscription model and topics**
 
-6. **Also support classic R4 criteria-based subscriptions.** *(rejected)* That model is superseded by topic-based subscriptions and would double validation and notification formats.
-7. **R4 topics as `Basic` resources** (code `fhir-types#SubscriptionTopic`, with R5 topic elements carried as extensions under a published, versioned profile). *(viable, chosen)*
-8. **R4 topics through an R4B-shaped `/SubscriptionTopic` endpoint, or server-configured topics only.** *(rejected)* The endpoint is non-standard on an R4 server, and server-only topics do not meet the requirement to define topics through the API.
+7. **Also support classic R4 criteria-based subscriptions.** *(rejected)* That model is superseded by topic-based subscriptions and would double validation and notification formats.
+8. **R4 topics as `Basic` resources** (code `fhir-types#SubscriptionTopic`, with R5 topic elements carried as extensions under a published, versioned profile). *(viable, chosen)*
+9. **R4 topics through an R4B-shaped `/SubscriptionTopic` endpoint, or server-configured topics only.** *(rejected)* The endpoint is non-standard on an R4 server, and server-only topics do not meet the requirement to define topics through the API.
 
 ## Decision
 
@@ -49,7 +55,7 @@ Implement topic-based subscriptions (R4 Backport, R4B, R5) on SQL Server, behind
 
 **Contract:**
 
-- **Topics:** definable through the API on all versions (option 7 on R4). Writes require a new `DataActions.SubscriptionTopic` permission whenever the old or the new resource is a topic.
+- **Topics:** definable through the API on all versions (option 8 on R4). Writes require a new `DataActions.SubscriptionTopic` permission whenever the old or the new resource is a topic.
 - **Channel:** v1 ships the rest-hook channel only, with a mandatory handshake.
 - **Payload:** `id-only` is the default. The server adds the content extension when the client omits it.
 - **Operations:** `$status` is in v1. `$events`, `notificationShape` and the Azure channels follow later.
@@ -75,6 +81,7 @@ Full scope, rationale and the delivery plan are in the [design proposal](Proposa
 - **Event source is open:** `Transactions` is preferred and `ResourceChangeData` is a documented alternative. Both are read-only uses of existing data, and both are implemented behind `ITransactionEventSource`. The final choice awaits product group guidance and is recorded here before acceptance.
 - **Open decisions are settings:** the event source (`EventSource`), whether versions `$import` writes as history notify (`NotifyHistoricalVersions`, default off), whether topics may use `no-version` resource types (`UnversionedResourceTypes`: `AllowWithGaps` or `RequireHistory`) and the maximum lifetime (`MaxLifetimeDays`) are configuration, so product group guidance changes defaults rather than code.
 - **Easier:** standard FHIR clients (R4 Backport first) can subscribe and get filtered, ordered notifications with gap detection. The in-memory evaluator and the event pump can be reused for future event-driven features.
+- **External matching:** the in-memory evaluator depends only on Core abstractions, not on SQL Server or the HTTP layer, so a service that consumes Azure Health Data Services events outside the server (option 6) can reuse it, with the limits noted there.
 - **Head-of-line latency:** a long `$import` batch or a stalled transaction delays notifications for every subscription, because visibility cannot advance past the oldest incomplete transaction. A latency target must be set from the phase 0 benchmark.
 - **History cleanup:** version-exact matching needs invisible history to outlive the pump's lag. While the feature is on, `InvisibleHistoryCleanupWatchdog` keeps history for at least a configurable hold; a version removed before the pump reads it is recorded as `Unevaluable`.
 - **Transaction ordering:** transaction ids come from the SQL Server clock, so they are not strictly increasing if that clock steps back. Rather than change the shared write path, the `Transactions` source reads a configurable lag behind the newest transactions and matches the same margin before activation. Writes that commit later than the lag are counted and logged, not notified, and changes just before activation may notify. Monotonic transaction ids in `MergeResourcesBeginTransaction` would remove the limitation and are a separate decision for the SQL storage owners.
