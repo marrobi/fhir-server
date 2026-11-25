@@ -18,6 +18,7 @@ using Microsoft.Health.Fhir.Core.Configs;
 using Microsoft.Health.Fhir.Core.Exceptions;
 using Microsoft.Health.Fhir.Core.Features.Context;
 using Microsoft.Health.Fhir.Core.Features.Operations;
+using Microsoft.Health.Fhir.Core.Features.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Security;
 using Microsoft.Health.Fhir.Core.Features.Security.Authorization;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
@@ -35,30 +36,33 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
     {
         private readonly IAuthorizationService<DataActions> _authorizationService;
         private readonly IMediator _mediator;
-        private readonly ISubscriptionResourceLoader _loader;
+        private readonly ResourceDeserializer _deserializer;
         private readonly ISubscriptionModelConverter _converter;
         private readonly ISubscriptionStore _store;
         private readonly ISubscriptionNotificationFactory _notificationFactory;
         private readonly SubscriptionsConfiguration _configuration;
+        private readonly int _maxIds;
         private readonly RequestContextAccessor<IFhirRequestContext> _requestContextAccessor;
 
         public SubscriptionStatusHandler(
             IAuthorizationService<DataActions> authorizationService,
             IMediator mediator,
-            ISubscriptionResourceLoader loader,
+            ResourceDeserializer deserializer,
             ISubscriptionModelConverter converter,
             ISubscriptionStore store,
             ISubscriptionNotificationFactory notificationFactory,
             IOptions<SubscriptionsConfiguration> configuration,
+            IOptions<CoreFeatureConfiguration> coreFeatures,
             RequestContextAccessor<IFhirRequestContext> requestContextAccessor)
         {
             _authorizationService = EnsureArg.IsNotNull(authorizationService, nameof(authorizationService));
             _mediator = EnsureArg.IsNotNull(mediator, nameof(mediator));
-            _loader = EnsureArg.IsNotNull(loader, nameof(loader));
+            _deserializer = EnsureArg.IsNotNull(deserializer, nameof(deserializer));
             _converter = EnsureArg.IsNotNull(converter, nameof(converter));
             _store = EnsureArg.IsNotNull(store, nameof(store));
             _notificationFactory = EnsureArg.IsNotNull(notificationFactory, nameof(notificationFactory));
             _configuration = EnsureArg.IsNotNull(configuration?.Value, nameof(configuration));
+            _maxIds = EnsureArg.IsNotNull(coreFeatures?.Value, nameof(coreFeatures)).MaxItemCountPerSearch;
             _requestContextAccessor = EnsureArg.IsNotNull(requestContextAccessor, nameof(requestContextAccessor));
         }
 
@@ -86,14 +90,18 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
                 throw new RequestNotValidException(Core.Resources.SubscriptionStatusIdRequired);
             }
 
+            // Each id costs a read and two store calls, and the result is one searchset bundle, so it is bounded like a search page.
+            if (request.SubscriptionIds.Count > _maxIds)
+            {
+                throw new RequestNotValidException(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionStatusTooManyIds, _maxIds));
+            }
+
             var statuses = new List<SubscriptionNotificationRequest>(request.SubscriptionIds.Count);
             foreach (string id in request.SubscriptionIds)
             {
                 // Reading through the request pipeline also applies resource-level authorization, including SMART scopes.
-                await _mediator.SendAsync(new GetResourceRequest(KnownResourceTypes.Subscription, id), cancellationToken);
-
-                ResourceElement resource = await _loader.GetSubscriptionAsync(id, cancellationToken)
-                    ?? throw new ResourceNotFoundException(string.Format(CultureInfo.InvariantCulture, Core.Resources.ResourceNotFoundById, KnownResourceTypes.Subscription, id));
+                GetResourceResponse response = await _mediator.SendAsync(new GetResourceRequest(KnownResourceTypes.Subscription, id), cancellationToken);
+                ResourceElement resource = _deserializer.Deserialize(response.Resource);
 
                 SubscriptionInfo info;
                 try

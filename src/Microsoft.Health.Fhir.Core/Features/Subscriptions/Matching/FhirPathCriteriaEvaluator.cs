@@ -4,7 +4,6 @@
 // -------------------------------------------------------------------------------------------------
 
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -21,7 +20,6 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
     public sealed class FhirPathCriteriaEvaluator
     {
         private readonly IFhirPathProvider _fhirPathProvider;
-        private readonly ConcurrentDictionary<string, ICompiledFhirPath> _cache = new(StringComparer.Ordinal);
 
         public FhirPathCriteriaEvaluator(IFhirPathProvider fhirPathProvider)
         {
@@ -73,17 +71,15 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
         {
             EnsureArg.IsNotNullOrWhiteSpace(expression, nameof(expression));
 
-            return _cache.GetOrAdd(expression, e =>
+            // The provider caches compiled expressions in a bounded cache.
+            try
             {
-                try
-                {
-                    return _fhirPathProvider.Compile(e);
-                }
-                catch (Exception ex)
-                {
-                    throw new SubscriptionCriteriaException(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionFhirPathInvalid, e, ex.Message), ex);
-                }
-            });
+                return _fhirPathProvider.Compile(expression);
+            }
+            catch (Exception ex)
+            {
+                throw new SubscriptionCriteriaException(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionFhirPathInvalid, expression, ex.Message), ex);
+            }
         }
     }
 }

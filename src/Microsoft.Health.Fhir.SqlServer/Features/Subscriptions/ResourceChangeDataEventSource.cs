@@ -38,7 +38,10 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
         private readonly SqlServerFhirResourceChangeDataStore _changeFeed;
         private readonly SqlResourceChangeReader _reader;
         private readonly CoreFeatureConfiguration _coreFeatures;
-        private DateTime? _lastTimestamp;
+
+        // The timestamp of the last record read, and its id. Only valid as a partition hint when the next read starts there: a page
+        // that is read again (not committed, or stale) starts earlier, and records before this timestamp would be skipped.
+        private (long Position, DateTime Timestamp)? _lastRead;
 
         public ResourceChangeDataEventSource(SqlServerFhirResourceChangeDataStore changeFeed, SqlResourceChangeReader reader, IOptions<CoreFeatureConfiguration> coreFeatures)
         {
@@ -75,8 +78,8 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
             short pageSize = (short)Math.Clamp(maxPositions, 1, short.MaxValue);
 
             // The start id is inclusive. The last timestamp only narrows which partitions are searched.
-            IReadOnlyCollection<ResourceChangeData> records = _lastTimestamp.HasValue
-                ? await _changeFeed.GetRecordsAsync(position + 1, _lastTimestamp.Value, pageSize, cancellationToken)
+            IReadOnlyCollection<ResourceChangeData> records = _lastRead?.Position == position
+                ? await _changeFeed.GetRecordsAsync(position + 1, _lastRead.Value.Timestamp, pageSize, cancellationToken)
                 : await _changeFeed.GetRecordsAsync(position + 1, pageSize, cancellationToken);
             if (records.Count == 0)
             {
@@ -123,7 +126,7 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
             }
 
             ResourceChangeData last = ordered[^1];
-            _lastTimestamp = last.Timestamp;
+            _lastRead = (last.Id, last.Timestamp);
             return new TransactionEventPage
             {
                 Changes = changes,

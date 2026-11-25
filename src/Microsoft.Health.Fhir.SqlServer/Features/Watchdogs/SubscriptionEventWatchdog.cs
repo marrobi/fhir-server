@@ -12,11 +12,11 @@ using System.Threading.Tasks;
 using EnsureThat;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Microsoft.Extensions.Primitives;
 using Microsoft.Health.Core.Features.Context;
 using Microsoft.Health.Fhir.Core.Configs;
 using Microsoft.Health.Fhir.Core.Extensions;
 using Microsoft.Health.Fhir.Core.Features.Context;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Events;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
@@ -39,6 +39,9 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
     internal sealed class SubscriptionEventWatchdog : Watchdog<SubscriptionEventWatchdog>
     {
         private static readonly TimeSpan CleanupInterval = TimeSpan.FromHours(1);
+
+        // Cleanup runs inside the pump, so it is time-boxed; what is left is removed on the next pump run.
+        private static readonly TimeSpan CleanupBudget = TimeSpan.FromSeconds(10);
         private static readonly TimeSpan MaxRunTime = TimeSpan.FromSeconds(30);
 
         private readonly IReadOnlyList<ITransactionEventSource> _sources;
@@ -132,7 +135,7 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
                 IReadOnlyList<SubscriptionState> states = await _subscriptionStore.GetStatesAsync(cancellationToken);
                 SubscriptionRegistrySnapshot snapshot = await _registry.EnsureIncludesAsync(states, cancellationToken);
                 List<RegisteredSubscription> matchable = snapshot.Subscriptions.Where(s => s.IsMatchable).ToList();
-                Func<string, bool> isCovered = matchable.Count == 0 ? null : type => SubscriptionEventProcessor.IsCovered(matchable, type);
+                Func<string, bool> isCovered = matchable.Count == 0 ? null : SubscriptionEventProcessor.CreateCoverage(matchable);
 
                 TransactionEventPage page = await source.ReadAsync(cursor.Value, Math.Max(1, _configuration.PumpTransactionBatchSize), isCovered, cancellationToken);
                 if (page.PositionCount == 0)
@@ -228,22 +231,16 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
                 return;
             }
 
-            _lastCleanup = Clock.UtcNow;
-            await _subscriptionStore.CleanupEventsAsync(Math.Max(1, _configuration.EventRetentionDays), cancellationToken);
+            // A backlog larger than one budget continues on the next pump run, so cleanup keeps up with the rate events complete.
+            if (await _subscriptionStore.CleanupEventsAsync(Math.Max(1, _configuration.EventRetentionDays), CleanupBudget, cancellationToken))
+            {
+                _lastCleanup = Clock.UtcNow;
+            }
         }
 
         private void SetBackgroundRequestContext()
         {
-            _requestContextAccessor.RequestContext = new FhirRequestContext(
-                method: Name,
-                uriString: "https://localhost/",
-                baseUriString: "https://localhost/",
-                correlationId: Guid.NewGuid().ToString(),
-                requestHeaders: new Dictionary<string, StringValues>(),
-                responseHeaders: new Dictionary<string, StringValues>())
-            {
-                IsBackgroundTask = true,
-            };
+            _requestContextAccessor.RequestContext = SubscriptionBackgroundContext.Create(Name, Guid.NewGuid().ToString());
         }
     }
 }

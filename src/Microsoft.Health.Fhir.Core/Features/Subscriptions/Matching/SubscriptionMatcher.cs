@@ -18,9 +18,6 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
     /// </summary>
     public sealed class SubscriptionMatcher
     {
-        private const string ResourceBase = "Resource";
-        private const string DomainResourceBase = "DomainResource";
-
         private static readonly HashSet<string> NonDomainResources = new(StringComparer.Ordinal)
         {
             KnownResourceTypes.Bundle, KnownResourceTypes.Binary, KnownResourceTypes.Parameters,
@@ -48,21 +45,23 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
                 return false;
             }
 
-            // R5 allows a full canonical (http://hl7.org/fhir/StructureDefinition/Encounter) as well as a type name.
-            string type = triggerResource;
-            int slash = type.LastIndexOf("/", StringComparison.Ordinal);
-            if (slash >= 0)
-            {
-                type = type.Substring(slash + 1);
-            }
-
+            string type = GetTypeName(triggerResource);
             return string.Equals(type, resourceType, StringComparison.Ordinal)
-                || string.Equals(type, ResourceBase, StringComparison.Ordinal)
-                || (string.Equals(type, DomainResourceBase, StringComparison.Ordinal) && !NonDomainResources.Contains(resourceType));
+                || string.Equals(type, KnownResourceTypes.Resource, StringComparison.Ordinal)
+                || (string.Equals(type, KnownResourceTypes.DomainResource, StringComparison.Ordinal) && !NonDomainResources.Contains(resourceType));
         }
 
         /// <summary>
-        /// Gets the concrete or base resource type name of a trigger, without any canonical prefix.
+        /// Gets a value indicating whether the type is the abstract <c>Resource</c> or <c>DomainResource</c> base type.
+        /// </summary>
+        /// <param name="type">The type name.</param>
+        /// <returns>Whether it is a base type.</returns>
+        public static bool IsBaseType(string type) =>
+            string.Equals(type, KnownResourceTypes.Resource, StringComparison.Ordinal) || string.Equals(type, KnownResourceTypes.DomainResource, StringComparison.Ordinal);
+
+        /// <summary>
+        /// Gets the concrete or base resource type name of a trigger, without any canonical prefix. R5 allows a full canonical
+        /// (http://hl7.org/fhir/StructureDefinition/Encounter) as well as a type name.
         /// </summary>
         /// <param name="triggerResource">The trigger resource.</param>
         /// <returns>The type name.</returns>

@@ -209,18 +209,6 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
         }
 
         /// <summary>
-        /// Appends matched events and advances the <c>Transactions</c> pump cursor to <paramref name="cursorTransactionId"/> in one transaction.
-        /// </summary>
-        /// <param name="events">The events in change order.</param>
-        /// <param name="cursorTransactionId">The last transaction covered by <paramref name="events"/>.</param>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>A task.</returns>
-        public async Task EnqueueAsync(IReadOnlyList<SubscriptionEventCandidate> events, long cursorTransactionId, CancellationToken cancellationToken)
-        {
-            await EnqueueAsync(events, CursorId, cursorTransactionId, activationVersion: null, cancellationToken);
-        }
-
-        /// <summary>
         /// Appends matched events and advances the named pump cursor to <paramref name="cursorPosition"/> in one transaction.
         /// </summary>
         /// <param name="events">The events in change order.</param>
@@ -276,10 +264,7 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
         /// <returns>The counter; zero before the first activation.</returns>
         public async Task<long> GetActivationVersionAsync(CancellationToken cancellationToken)
         {
-            await using var cmd = new SqlCommand("SELECT isnull((SELECT Bigint FROM dbo.Parameters WHERE Id = @Id), 0)");
-            cmd.Parameters.AddWithValue("@Id", ActivationVersionId);
-            object value = await cmd.ExecuteScalarAsync(_sqlRetryService, _logger, cancellationToken);
-            return value == null || value == DBNull.Value ? 0 : (long)value;
+            return await GetBigintParameterAsync(ActivationVersionId, cancellationToken) ?? 0;
         }
 
         /// <summary>
@@ -330,16 +315,6 @@ COMMIT TRANSACTION");
         }
 
         /// <summary>
-        /// Reads the <c>Transactions</c> pump cursor, or null when the pump has never run.
-        /// </summary>
-        /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>The cursor.</returns>
-        public Task<long?> GetCursorAsync(CancellationToken cancellationToken)
-        {
-            return GetCursorAsync(CursorId, cancellationToken);
-        }
-
-        /// <summary>
         /// Reads the named pump cursor, or null when the pump has never run for that event source.
         /// </summary>
         /// <param name="cursorId">The cursor of an event source.</param>
@@ -348,9 +323,13 @@ COMMIT TRANSACTION");
         public async Task<long?> GetCursorAsync(string cursorId, CancellationToken cancellationToken)
         {
             EnsureArg.IsNotNullOrWhiteSpace(cursorId, nameof(cursorId));
+            return await GetBigintParameterAsync(cursorId, cancellationToken);
+        }
 
+        private async Task<long?> GetBigintParameterAsync(string id, CancellationToken cancellationToken)
+        {
             await using var cmd = new SqlCommand("SELECT Bigint FROM dbo.Parameters WHERE Id = @Id");
-            cmd.Parameters.AddWithValue("@Id", cursorId);
+            cmd.Parameters.AddWithValue("@Id", id);
             object value = await cmd.ExecuteScalarAsync(_sqlRetryService, _logger, cancellationToken);
             return value == null || value == DBNull.Value ? null : (long)value;
         }
@@ -359,14 +338,21 @@ COMMIT TRANSACTION");
         /// Deletes delivered, unevaluable and not-authorized events older than the retention period.
         /// </summary>
         /// <param name="retentionDays">The retention period in days.</param>
+        /// <param name="maxDuration">The time after which no new delete batch starts, or null to delete everything that is due.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>A task.</returns>
-        public async Task CleanupEventsAsync(int retentionDays, CancellationToken cancellationToken)
+        /// <returns>True when every due event was deleted; false when <paramref name="maxDuration"/> stopped the cleanup first.</returns>
+        public async Task<bool> CleanupEventsAsync(int retentionDays, TimeSpan? maxDuration, CancellationToken cancellationToken)
         {
             await using SqlCommand cmd = Procedure("dbo.CleanupSubscriptionEvents");
-            cmd.CommandTimeout = 600;
+
+            // The budget only stops new batches; allow the last batch to finish.
+            cmd.CommandTimeout = maxDuration.HasValue ? (int)maxDuration.Value.TotalSeconds + 60 : 600;
             cmd.Parameters.AddWithValue("@RetentionDays", retentionDays);
+            cmd.Parameters.AddWithValue("@MaxSeconds", maxDuration.HasValue ? (int)Math.Ceiling(maxDuration.Value.TotalSeconds) : DBNull.Value);
+            var isComplete = new SqlParameter("@IsComplete", SqlDbType.Bit) { Direction = ParameterDirection.Output };
+            cmd.Parameters.Add(isComplete);
             await cmd.ExecuteNonQueryAsync(_sqlRetryService, _logger, cancellationToken);
+            return isComplete.Value is bool complete && complete;
         }
 
         private async Task UpdateEventsAsync(string subscriptionId, IReadOnlyList<long> eventNumbers, SubscriptionEventStatus? status, bool incrementAttempts, DateTimeOffset? nextAttemptUtc, string error, CancellationToken cancellationToken)

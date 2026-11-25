@@ -6,6 +6,7 @@
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Health.Fhir.Core.Features.Persistence;
 using Microsoft.Health.Fhir.Core.Models;
 
 namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
@@ -30,8 +31,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         Task<ResourceElement> GetResourceAsync(string resourceType, string id, CancellationToken cancellationToken);
 
         /// <summary>
-        /// Reads a specific resource version, or null when it is no longer available.
+        /// Reads specific resource versions in one call. Versions that are no longer available, or deleted, are missing from the result.
         /// </summary>
-        Task<ResourceElement> GetResourceVersionAsync(string resourceType, string id, int version, CancellationToken cancellationToken);
+        Task<IReadOnlyDictionary<ResourceKey, ResourceElement>> GetResourceVersionsAsync(IReadOnlyList<ResourceKey> keys, CancellationToken cancellationToken);
     }
 }

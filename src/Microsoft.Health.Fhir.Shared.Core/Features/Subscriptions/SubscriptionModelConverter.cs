@@ -83,7 +83,6 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
                 ResourceTriggers = TopicExtensions(basic, "resourceTrigger").Select(ToTrigger).ToList(),
                 CanFilterBy = TopicExtensions(basic, "canFilterBy").Select(ToCanFilterBy).ToList(),
                 HasEventTriggers = TopicExtensions(basic, "eventTrigger").Any(),
-                HasNotificationShape = TopicExtensions(basic, "notificationShape").Any(),
             };
 
             // HAPI FHIR writes resourceTrigger, canFilterBy and notificationShape with the 4.3 prefix and status as a modifier
@@ -178,7 +177,6 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
                 }).ToList(),
                 HasEventTriggers = topic.EventTrigger.Count > 0,
 #if R5
-                HasNotificationShape = topic.NotificationShape.Count > 0,
 #endif
             };
         }
@@ -208,7 +206,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             {
                 Id = subscription.Id,
                 VersionId = subscription.Meta?.VersionId,
-                Status = ParseStatus(subscription.Status?.GetLiteral()),
+                Status = SubscriptionStatusCodeExtensions.ParseSubscriptionStatus(subscription.Status?.GetLiteral()),
                 TopicCanonical = subscription.Topic,
                 Filters = subscription.FilterBy.Select(f => new SubscriptionFilter
                 {
@@ -232,9 +230,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
 
         public void ApplyServerValues(ResourceElement resource, SubscriptionStatusCode status, DateTimeOffset? end)
         {
-            EnsureArg.IsNotNull(resource, nameof(resource));
-            var subscription = resource.ToPoco<Subscription>();
-            subscription.Status = EnumUtility.ParseLiteral<SubscriptionStatusCodes>(ToLiteral(status));
+            var subscription = GetInstance(resource);
+            subscription.Status = ToPocoStatus(status);
             subscription.Content ??= Subscription.SubscriptionPayloadContent.IdOnly;
             if (string.IsNullOrWhiteSpace(subscription.ContentType))
             {
@@ -253,7 +250,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
 
             // R5 has no Subscription.error; errors are reported through $status.
             var subscription = (Subscription)resource.ToPoco<Subscription>().DeepCopy();
-            subscription.Status = EnumUtility.ParseLiteral<SubscriptionStatusCodes>(ToLiteral(status));
+            subscription.Status = ToPocoStatus(status);
             return subscription.ToResourceElement();
         }
 #else
@@ -313,7 +310,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             {
                 Id = subscription.Id,
                 VersionId = subscription.Meta?.VersionId,
-                Status = ParseStatus(subscription.Status?.GetLiteral()),
+                Status = SubscriptionStatusCodeExtensions.ParseSubscriptionStatus(subscription.Status?.GetLiteral()),
                 TopicCanonical = topic,
                 Filters = filters,
                 ChannelType = channelType,
@@ -337,11 +334,9 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
 
         public void ApplyServerValues(ResourceElement resource, SubscriptionStatusCode status, DateTimeOffset? end)
         {
-            EnsureArg.IsNotNull(resource, nameof(resource));
-            var subscription = resource.ToPoco<Subscription>();
+            var subscription = GetInstance(resource);
             subscription.Status = ToPocoStatus(status);
             subscription.Error = null;
-            subscription.Channel ??= new Subscription.ChannelComponent();
             if (string.IsNullOrWhiteSpace(subscription.Channel.Payload))
             {
                 subscription.Channel.Payload = DefaultContentType;
@@ -367,14 +362,23 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             subscription.Error = error;
             return subscription.ToResourceElement();
         }
+#endif
 
-#if R4B
-        private static SubscriptionStatusCodes ToPocoStatus(SubscriptionStatusCode status) => EnumUtility.ParseLiteral<SubscriptionStatusCodes>(ToLiteral(status)).Value;
-#else
+#if R4 && !R4B
+        // R4 has no entered-in-error status.
         private static Subscription.SubscriptionStatus ToPocoStatus(SubscriptionStatusCode status) =>
-            EnumUtility.ParseLiteral<Subscription.SubscriptionStatus>(status == SubscriptionStatusCode.EnteredInError ? "off" : ToLiteral(status)).Value;
+            EnumUtility.ParseLiteral<Subscription.SubscriptionStatus>(status == SubscriptionStatusCode.EnteredInError ? "off" : status.ToLiteral()).Value;
+#else
+        private static SubscriptionStatusCodes ToPocoStatus(SubscriptionStatusCode status) => EnumUtility.ParseLiteral<SubscriptionStatusCodes>(status.ToLiteral()).Value;
 #endif
-#endif
+
+        // The server values must be written to the instance the caller saves; a copy made from the typed element would be dropped.
+        private static Subscription GetInstance(ResourceElement resource)
+        {
+            EnsureArg.IsNotNull(resource, nameof(resource));
+            return resource.ResourceInstance as Subscription
+                ?? throw new ArgumentException("The subscription resource must be backed by a resource instance.", nameof(resource));
+        }
 
         private static string ExtensionString(Extension extension)
         {
@@ -418,23 +422,6 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             _ => throw new SubscriptionValidationException(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionContentInvalid, literal)),
         };
 
-        private static SubscriptionStatusCode ParseStatus(string literal) => literal switch
-        {
-            "active" => SubscriptionStatusCode.Active,
-            "error" => SubscriptionStatusCode.Error,
-            "off" => SubscriptionStatusCode.Off,
-            "entered-in-error" => SubscriptionStatusCode.EnteredInError,
-            _ => SubscriptionStatusCode.Requested,
-        };
-
-        private static string ToLiteral(SubscriptionStatusCode status) => status switch
-        {
-            SubscriptionStatusCode.Active => "active",
-            SubscriptionStatusCode.Error => "error",
-            SubscriptionStatusCode.Off => "off",
-            SubscriptionStatusCode.EnteredInError => "entered-in-error",
-            _ => "requested",
-        };
 #endif
     }
 }

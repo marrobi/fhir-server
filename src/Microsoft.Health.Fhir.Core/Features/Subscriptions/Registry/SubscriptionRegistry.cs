@@ -64,13 +64,10 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry
         /// <returns>The snapshot.</returns>
         public async Task<SubscriptionRegistrySnapshot> GetAsync(TimeSpan maxAge, CancellationToken cancellationToken)
         {
-            SubscriptionRegistrySnapshot snapshot = _current;
-            if (!_stale && Clock.UtcNow - snapshot.LoadedUtc < maxAge)
-            {
-                return snapshot;
-            }
+            bool IsFresh(SubscriptionRegistrySnapshot s) => !_stale && Clock.UtcNow - s.LoadedUtc < maxAge;
 
-            return await RefreshAsync(cancellationToken);
+            SubscriptionRegistrySnapshot snapshot = _current;
+            return IsFresh(snapshot) ? snapshot : await RefreshAsync(IsFresh, cancellationToken);
         }
 
         /// <summary>
@@ -84,14 +81,14 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry
         {
             EnsureArg.IsNotNull(states, nameof(states));
 
-            SubscriptionRegistrySnapshot snapshot = _current;
-            bool missing = _stale || states.Any(s =>
+            bool Includes(SubscriptionRegistrySnapshot snapshot) => !_stale && !states.Any(s =>
                 s.ActivationTransactionId != null &&
                 (!snapshot.ById.TryGetValue(s.SubscriptionId, out RegisteredSubscription registered) ||
                  registered.State?.ActivationTransactionId != s.ActivationTransactionId ||
                  !string.Equals(registered.State?.ContentHash, s.ContentHash, StringComparison.Ordinal)));
 
-            return missing ? await RefreshAsync(cancellationToken) : snapshot;
+            SubscriptionRegistrySnapshot current = _current;
+            return Includes(current) ? current : await RefreshAsync(Includes, cancellationToken);
         }
 
         /// <summary>
@@ -99,11 +96,21 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry
         /// </summary>
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns>The new snapshot.</returns>
-        public async Task<SubscriptionRegistrySnapshot> RefreshAsync(CancellationToken cancellationToken)
+        public Task<SubscriptionRegistrySnapshot> RefreshAsync(CancellationToken cancellationToken) => RefreshAsync(null, cancellationToken);
+
+        // Callers that queued behind another refresh reuse its snapshot when it already satisfies them, so N concurrent callers do
+        // not reload N times. A refresh clears the stale flag before it loads, so an invalidation during the load still forces another.
+        private async Task<SubscriptionRegistrySnapshot> RefreshAsync(Func<SubscriptionRegistrySnapshot, bool> isSatisfiedBy, CancellationToken cancellationToken)
         {
             await _refreshLock.WaitAsync(cancellationToken);
             try
             {
+                SubscriptionRegistrySnapshot current = _current;
+                if (isSatisfiedBy?.Invoke(current) == true)
+                {
+                    return current;
+                }
+
                 _stale = false;
                 IReadOnlyList<ResourceElement> topics = await _loader.GetTopicsAsync(cancellationToken);
                 IReadOnlyList<ResourceElement> subscriptions = await _loader.GetSubscriptionsAsync(cancellationToken);
@@ -135,6 +142,27 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry
             EnsureArg.IsNotNull(subscriptions, nameof(subscriptions));
             EnsureArg.IsNotNull(topics, nameof(topics));
             EnsureArg.IsNotNull(states, nameof(states));
+
+            Dictionary<string, SubscriptionTopicInfo> topicMap = BuildTopicMap(topics);
+            Dictionary<string, SubscriptionState> stateMap = states.ToDictionary(s => s.SubscriptionId, StringComparer.Ordinal);
+            var registered = new List<RegisteredSubscription>(subscriptions.Count);
+            foreach (ResourceElement resource in subscriptions)
+            {
+                registered.Add(Register(resource, topicMap, stateMap.GetValueOrDefault(resource.Id)));
+            }
+
+            return new SubscriptionRegistrySnapshot(registered, topicMap, Clock.UtcNow);
+        }
+
+        /// <summary>
+        /// Converts topic resources into a map keyed by canonical, and by versioned canonical when the topic has a version.
+        /// Resources that are not topics or are not valid are left out.
+        /// </summary>
+        /// <param name="topics">The topic resources.</param>
+        /// <returns>Topics keyed by canonical.</returns>
+        public Dictionary<string, SubscriptionTopicInfo> BuildTopicMap(IEnumerable<ResourceElement> topics)
+        {
+            EnsureArg.IsNotNull(topics, nameof(topics));
 
             var topicMap = new Dictionary<string, SubscriptionTopicInfo>(StringComparer.Ordinal);
             foreach (ResourceElement resource in topics)
@@ -169,14 +197,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry
                 }
             }
 
-            Dictionary<string, SubscriptionState> stateMap = states.ToDictionary(s => s.SubscriptionId, StringComparer.Ordinal);
-            var registered = new List<RegisteredSubscription>(subscriptions.Count);
-            foreach (ResourceElement resource in subscriptions)
-            {
-                registered.Add(Register(resource, topicMap, stateMap.GetValueOrDefault(resource.Id)));
-            }
-
-            return new SubscriptionRegistrySnapshot(registered, topicMap, Clock.UtcNow);
+            return topicMap;
         }
 
         /// <summary>

@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.IO;
 using Hl7.Fhir.Model;
 using Hl7.Fhir.Serialization;
+using Hl7.Fhir.Specification.Snapshot;
 using Hl7.Fhir.Specification.Source;
 
 namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
@@ -24,9 +25,9 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         // A validator must understand every modifier extension, so an unresolvable status extension is an error, not a warning.
         private const string StatusExtensionResourceName = "subscription-topic-status-extension.json";
 
-        private static readonly Lazy<IReadOnlyList<StructureDefinition>> Definitions = new(() => Load(ResourceName));
-
         private static readonly Lazy<IReadOnlyList<StructureDefinition>> ExtensionDefinitions = new(() => Load(StatusExtensionResourceName));
+
+        private static readonly Lazy<IReadOnlyList<StructureDefinition>> Definitions = new(() => WithSnapshots(Load(ResourceName)));
 
         /// <summary>
         /// Gets the built-in profiles for this FHIR version; empty except on R4.
@@ -49,6 +50,28 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
 
             using var reader = new StreamReader(stream);
             return [new FhirJsonParser().Parse<StructureDefinition>(reader.ReadToEnd())];
+        }
+
+        // The validator generates a missing snapshot inside the shared definition on first use, which concurrent validations
+        // race on. The snapshot is generated once here, before the definitions are published.
+        private static IReadOnlyList<StructureDefinition> WithSnapshots(IReadOnlyList<StructureDefinition> definitions)
+        {
+            if (definitions.Count == 0)
+            {
+                return definitions;
+            }
+
+            var resolver = new MultiResolver(ZipSource.CreateValidationSource(), new InMemoryResourceResolver([.. definitions, .. ExtensionDefinitions.Value]));
+            var generator = new SnapshotGenerator(resolver.AsAsync(), SnapshotGeneratorSettings.CreateDefault());
+            foreach (StructureDefinition definition in definitions)
+            {
+                if (!definition.HasSnapshot)
+                {
+                    generator.UpdateAsync(definition).GetAwaiter().GetResult();
+                }
+            }
+
+            return definitions;
         }
     }
 }

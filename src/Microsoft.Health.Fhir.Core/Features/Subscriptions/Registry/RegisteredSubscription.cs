@@ -55,6 +55,6 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Registry
         /// </summary>
         public bool IsMatchable =>
             IsValid && HasValidGrant && Topic != null && State?.ActivationTransactionId != null &&
-            Info.Status is SubscriptionStatusCode.Requested or SubscriptionStatusCode.Active or SubscriptionStatusCode.Error;
+            Info.Status.IsLive();
     }
 }

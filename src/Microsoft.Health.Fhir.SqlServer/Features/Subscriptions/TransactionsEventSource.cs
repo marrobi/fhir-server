@@ -34,7 +34,6 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
         private readonly SubscriptionsConfiguration _configuration;
         private readonly ILogger<TransactionsEventSource> _logger;
         private readonly ISubscriptionMetricHandler _metrics;
-        private readonly object _sync = new();
         private Queue<long> _fetched = new();
         private DateTime? _lateCheckedUntil;
         private DateTimeOffset _nextLateCheck;
@@ -74,27 +73,23 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
             var changes = new List<ResourceChange>();
             if (isCovered != null)
             {
-                foreach (long transactionId in transactionIds)
+                // One read for the page. The range can include transactions that are not in the page, such as failed ones; they are skipped.
+                var pageTransactions = new HashSet<long>(transactionIds);
+                var versions = (await _reader.GetTransactionVersionsAsync(transactionIds[0], transactionIds[^1], cancellationToken))
+                    .Where(v => pageTransactions.Contains(v.TransactionId) && isCovered(v.Wrapper.ResourceTypeName))
+                    .Select(v => (v.TransactionId, v.Wrapper, Key: (_reader.Model.GetResourceTypeId(v.Wrapper.ResourceTypeName), v.Wrapper.ResourceId, int.Parse(v.Wrapper.Version, CultureInfo.InvariantCulture))))
+                    .OrderBy(v => v.TransactionId)
+                    .ThenBy(v => v.Wrapper.ResourceSurrogateId)
+                    .ToList();
+
+                // Only a version that is already history can have been written as history, so only those need the lookup.
+                IReadOnlyDictionary<(short ResourceTypeId, string ResourceId, int Version), (long? TransactionId, bool WrittenAsHistory)> writeInfo =
+                    await _reader.GetWriteInfoAsync(versions.Where(v => v.Wrapper.IsHistory).Select(v => v.Key).ToList(), cancellationToken);
+
+                foreach ((long transactionId, ResourceWrapper wrapper, (short, string, int) key) in versions)
                 {
-                    IReadOnlyList<ResourceWrapper> wrappers = (await _reader.GetTransactionVersionsAsync(transactionId, cancellationToken))
-                        .Where(w => isCovered(w.ResourceTypeName))
-                        .OrderBy(w => w.ResourceSurrogateId)
-                        .ToList();
-
-                    // Only a version that is already history can have been written as history, so only those need the lookup.
-                    List<(short, string, int)> historyKeys = wrappers
-                        .Where(w => w.IsHistory)
-                        .Select(w => (_reader.Model.GetResourceTypeId(w.ResourceTypeName), w.ResourceId, int.Parse(w.Version, CultureInfo.InvariantCulture)))
-                        .ToList();
-                    IReadOnlyDictionary<(short ResourceTypeId, string ResourceId, int Version), (long? TransactionId, bool WrittenAsHistory)> writeInfo =
-                        await _reader.GetWriteInfoAsync(historyKeys, cancellationToken);
-
-                    foreach (ResourceWrapper wrapper in wrappers)
-                    {
-                        var key = (_reader.Model.GetResourceTypeId(wrapper.ResourceTypeName), wrapper.ResourceId, int.Parse(wrapper.Version, CultureInfo.InvariantCulture));
-                        bool writtenAsHistory = writeInfo.TryGetValue(key, out (long? TransactionId, bool WrittenAsHistory) info) && info.WrittenAsHistory;
-                        changes.Add(_reader.CreateChange(wrapper, transactionId, writtenAsHistory));
-                    }
+                    bool writtenAsHistory = writeInfo.TryGetValue(key, out (long? TransactionId, bool WrittenAsHistory) info) && info.WrittenAsHistory;
+                    changes.Add(_reader.CreateChange(wrapper, transactionId, writtenAsHistory));
                 }
 
                 await _reader.LoadPreviousVersionsAsync(changes, cancellationToken);
@@ -135,13 +130,10 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
 
         private async Task<List<long>> NextTransactionsAsync(long position, int maxPositions, CancellationToken cancellationToken)
         {
-            lock (_sync)
+            // Drop anything at or before the position, which also discards the cache if the cursor moved elsewhere.
+            while (_fetched.Count > 0 && _fetched.Peek() <= position)
             {
-                // Drop anything at or before the position, which also discards the cache if the cursor moved elsewhere.
-                while (_fetched.Count > 0 && _fetched.Peek() <= position)
-                {
-                    _fetched.Dequeue();
-                }
+                _fetched.Dequeue();
             }
 
             if (_fetched.Count == 0)
@@ -160,27 +152,10 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
                 // GetTransactions returns at most 10,000 transactions; keep them for the following pages.
                 IReadOnlyList<(long TransactionId, DateTime? VisibleDate, DateTime? InvisibleHistoryRemovedDate)> transactions =
                     await _reader.Store.GetTransactionsAsync(position, end, cancellationToken);
-                lock (_sync)
-                {
-                    _fetched = new Queue<long>(transactions.Select(t => t.TransactionId).OrderBy(t => t));
-                }
+                _fetched = new Queue<long>(transactions.Select(t => t.TransactionId).OrderBy(t => t));
             }
 
-            lock (_sync)
-            {
-                var result = new List<long>(maxPositions);
-                foreach (long transactionId in _fetched)
-                {
-                    if (result.Count == maxPositions)
-                    {
-                        break;
-                    }
-
-                    result.Add(transactionId);
-                }
-
-                return result;
-            }
+            return _fetched.Take(maxPositions).ToList();
         }
     }
 }

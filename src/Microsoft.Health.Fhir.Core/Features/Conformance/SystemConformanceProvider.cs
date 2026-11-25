@@ -269,6 +269,9 @@ namespace Microsoft.Health.Fhir.Core.Features.Conformance
 
                         // Update instantiates capabilities.
                         await UpdateInstantiatesCapabilitiesAsync(_cancellationTokenSource.Token);
+
+                        // Update capabilities that change while the server runs.
+                        await RefreshCapabilitiesAsync(_cancellationTokenSource.Token);
                     }
                 }
                 catch (Exception e)
@@ -447,6 +450,30 @@ namespace Microsoft.Health.Fhir.Core.Features.Conformance
                             _logger.LogError(e, "SystemConformanceProvider: Failed running '{ProviderName}' when updating instantiates capabilities.", provider.ToString());
                             throw;
                         }
+                    }
+                }
+            }
+        }
+
+        private async Task RefreshCapabilitiesAsync(CancellationToken cancellationToken)
+        {
+            if (_builder == null)
+            {
+                return;
+            }
+
+            using (IScoped<IEnumerable<IProvideCapability>> providerFactory = _capabilityProviders.Invoke())
+            {
+                foreach (IRefreshCapability provider in providerFactory.Value?.OfType<IRefreshCapability>() ?? [])
+                {
+                    try
+                    {
+                        await provider.RefreshAsync(_builder, cancellationToken);
+                    }
+                    catch (Exception e) when (e is not OperationCanceledException)
+                    {
+                        // One provider failing must not stop the others from refreshing.
+                        _logger.LogError(e, "SystemConformanceProvider: Failed refreshing '{ProviderName}'.", provider.ToString());
                     }
                 }
             }

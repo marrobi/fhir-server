@@ -3087,6 +3087,15 @@ namespace Microsoft.Health.Fhir.Core {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to The $status operation accepts at most {0} subscription ids..
+        /// </summary>
+        internal static string SubscriptionStatusTooManyIds {
+            get {
+                return ResourceManager.GetString("SubscriptionStatusTooManyIds", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to {0} event(s) could not be evaluated because a resource version was no longer available; they were not sent..
         /// </summary>
         internal static string SubscriptionUnevaluableEvents {

@@ -42,17 +42,22 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
         }
 
         /// <summary>
-        /// Returns true when some subscription's topic has a trigger for <paramref name="resourceType"/>.
+        /// Returns a predicate that is true for the resource types some subscription's topic has a trigger for. Built once per
+        /// page of changes, so each change record costs one set lookup instead of a scan of every subscription's triggers.
         /// </summary>
         /// <param name="subscriptions">Matchable subscriptions.</param>
-        /// <param name="resourceType">The resource type.</param>
-        /// <returns>Whether changes of this type must be evaluated.</returns>
-        public static bool IsCovered(IReadOnlyList<RegisteredSubscription> subscriptions, string resourceType)
+        /// <returns>Whether changes of a resource type must be evaluated.</returns>
+        public static Func<string, bool> CreateCoverage(IReadOnlyList<RegisteredSubscription> subscriptions)
         {
             EnsureArg.IsNotNull(subscriptions, nameof(subscriptions));
 
-            return !string.Equals(resourceType, KnownResourceTypes.Subscription, StringComparison.Ordinal) &&
-                subscriptions.Any(s => s.Topic.ResourceTriggers.Any(t => SubscriptionMatcher.AppliesTo(t.Resource, resourceType)));
+            var triggerTypes = new HashSet<string>(
+                subscriptions.SelectMany(s => s.Topic.ResourceTriggers).Select(t => SubscriptionMatcher.GetTypeName(t.Resource)).Where(t => !string.IsNullOrEmpty(t)),
+                StringComparer.Ordinal);
+
+            return resourceType =>
+                !string.Equals(resourceType, KnownResourceTypes.Subscription, StringComparison.Ordinal) &&
+                triggerTypes.Any(t => SubscriptionMatcher.AppliesTo(t, resourceType));
         }
 
         /// <summary>

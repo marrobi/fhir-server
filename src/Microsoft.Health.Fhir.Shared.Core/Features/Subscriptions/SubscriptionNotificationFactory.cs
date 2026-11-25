@@ -157,9 +157,14 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
 #if R4 && !R4B
             var parameters = new FhirParameters { Id = Guid.NewGuid().ToString(), Meta = new Meta { Profile = [SubscriptionsBackport.StatusR4Profile] } };
             parameters.Parameter.Add(new FhirParameters.ParameterComponent { Name = "subscription", Value = new ResourceReference(subscriptionUrl) });
-            parameters.Parameter.Add(new FhirParameters.ParameterComponent { Name = "topic", Value = new Canonical(subscription.TopicCanonical) });
-            parameters.Parameter.Add(new FhirParameters.ParameterComponent { Name = "status", Value = new Code(ToLiteral(request.Status)) });
-            parameters.Parameter.Add(new FhirParameters.ParameterComponent { Name = "type", Value = new Code(ToLiteral(request.Type)) });
+            if (!string.IsNullOrEmpty(subscription.TopicCanonical))
+            {
+                // An unparseable subscription has no topic; a parameter without a value is invalid (inv-1).
+                parameters.Parameter.Add(new FhirParameters.ParameterComponent { Name = "topic", Value = new Canonical(subscription.TopicCanonical) });
+            }
+
+            parameters.Parameter.Add(new FhirParameters.ParameterComponent { Name = "status", Value = new Code(request.Status.ToLiteral()) });
+            parameters.Parameter.Add(new FhirParameters.ParameterComponent { Name = "type", Value = new Code(request.Type.ToLiteral()) });
             parameters.Parameter.Add(new FhirParameters.ParameterComponent { Name = "events-since-subscription-start", Value = new FhirString(request.EventsSinceSubscriptionStart.ToString(CultureInfo.InvariantCulture)) });
 
             foreach (SubscriptionNotificationEvent notificationEvent in request.Events)
@@ -185,8 +190,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             var status = new SubscriptionStatus
             {
                 Id = Guid.NewGuid().ToString(),
-                Status = Hl7.Fhir.Utility.EnumUtility.ParseLiteral<SubscriptionStatusCodes>(ToLiteral(request.Status)),
-                Type = Hl7.Fhir.Utility.EnumUtility.ParseLiteral<SubscriptionStatus.SubscriptionNotificationType>(ToLiteral(request.Type)),
+                Status = Hl7.Fhir.Utility.EnumUtility.ParseLiteral<SubscriptionStatusCodes>(request.Status.ToLiteral()),
+                Type = Hl7.Fhir.Utility.EnumUtility.ParseLiteral<SubscriptionStatus.SubscriptionNotificationType>(request.Type.ToLiteral()),
 #if R5
                 EventsSinceSubscriptionStart = request.EventsSinceSubscriptionStart,
 #else
@@ -223,23 +228,6 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         {
             return baseUri == null ? relative : new Uri(baseUri, relative).ToString();
         }
-
-        private static string ToLiteral(SubscriptionStatusCode status) => status switch
-        {
-            SubscriptionStatusCode.Active => "active",
-            SubscriptionStatusCode.Error => "error",
-            SubscriptionStatusCode.Off => "off",
-            SubscriptionStatusCode.EnteredInError => "entered-in-error",
-            _ => "requested",
-        };
-
-        private static string ToLiteral(SubscriptionNotificationType type) => type switch
-        {
-            SubscriptionNotificationType.Handshake => "handshake",
-            SubscriptionNotificationType.Heartbeat => "heartbeat",
-            SubscriptionNotificationType.QueryStatus => "query-status",
-            _ => "event-notification",
-        };
 #endif
     }
 }

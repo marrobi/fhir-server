@@ -25,9 +25,9 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
     /// <summary>
     /// Declares subscription support in the CapabilityStatement: the Backport server CapabilityStatement in <c>instantiates</c>
     /// and the Backport subscription profile in <c>supportedProfile</c> (R4, R4B), the <c>$status</c> operation, and on R4 the
-    /// topics known when the statement is built, through the topic-canonical extension, and the topic profile on <c>Basic</c>.
+    /// known topics, through the topic-canonical extension refreshed with the statement, and the topic profile on <c>Basic</c>.
     /// </summary>
-    public sealed class SubscriptionsCapabilityProvider : IProvideCapability, IInstantiateCapability
+    public sealed class SubscriptionsCapabilityProvider : IRefreshCapability, IInstantiateCapability
     {
         private readonly SubscriptionsConfiguration _configuration;
         private readonly ISubscriptionModelConverter _converter;
@@ -52,8 +52,9 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             _logger = EnsureArg.IsNotNull(logger, nameof(logger));
         }
 
-        // Not advertised until the store is usable, for example after the database schema upgrade; the statement is rebuilt periodically.
-        private bool IsEnabled => _configuration.Enabled && _converter.IsSupported && _store.Availability == SubscriptionStoreAvailability.Available;
+        // A store that is not ready yet, for example during the database schema upgrade, becomes ready without a restart, and
+        // subscription writes return 503 meanwhile; so it is advertised. A store that does not support subscriptions is not.
+        private bool IsEnabled => _configuration.Enabled && _converter.IsSupported && _store.Availability != SubscriptionStoreAvailability.NotSupported;
 
         public async Task BuildAsync(ICapabilityStatementBuilder builder, CancellationToken cancellationToken)
         {
@@ -61,21 +62,6 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             if (!IsEnabled)
             {
                 return;
-            }
-
-            List<string> topics = [];
-            if (_modelInfoProvider.Version == FhirSpecification.R4)
-            {
-                try
-                {
-                    SubscriptionRegistrySnapshot snapshot = await _registry.GetAsync(TimeSpan.FromSeconds(_configuration.RegistryRefreshIntervalSeconds), cancellationToken);
-                    topics = snapshot.Topics.Values.Select(t => t.Canonical).Distinct(StringComparer.Ordinal).OrderBy(t => t, StringComparer.Ordinal).ToList();
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    // Storage may not be ready when the statement is first built; topics are also discoverable by search.
-                    _logger.LogInformation(ex, "Subscription topics could not be listed in the CapabilityStatement.");
-                }
             }
 
             if (_modelInfoProvider.Version == FhirSpecification.R4)
@@ -96,15 +82,51 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
                     Name = "status",
                     Definition = new ReferenceComponent { Reference = OperationsConstants.SubscriptionStatusUri },
                 });
+            });
 
-                if (topics.Count > 0)
+            await RefreshAsync(builder, cancellationToken);
+        }
+
+        /// <summary>
+        /// Replaces the topic-canonical extensions (R4) with the topics known now.
+        /// </summary>
+        /// <param name="builder">The CapabilityStatement builder.</param>
+        /// <param name="cancellationToken">The cancellation token.</param>
+        /// <returns>A task.</returns>
+        public async Task RefreshAsync(ICapabilityStatementBuilder builder, CancellationToken cancellationToken)
+        {
+            EnsureArg.IsNotNull(builder, nameof(builder));
+            if (!IsEnabled || _modelInfoProvider.Version != FhirSpecification.R4 || _store.Availability != SubscriptionStoreAvailability.Available)
+            {
+                return;
+            }
+
+            List<string> topics;
+            try
+            {
+                SubscriptionRegistrySnapshot snapshot = await _registry.GetAsync(TimeSpan.FromSeconds(_configuration.RegistryRefreshIntervalSeconds), cancellationToken);
+                topics = snapshot.Topics.Values.Select(t => t.Canonical).Distinct(StringComparer.Ordinal).OrderBy(t => t, StringComparer.Ordinal).ToList();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Keep the topics listed last time; topics are also discoverable by search.
+                _logger.LogInformation(ex, "Subscription topics could not be listed in the CapabilityStatement.");
+                return;
+            }
+
+            builder.ApplyToResource(KnownResourceTypes.Subscription, resource =>
+            {
+                if (topics.Count == 0)
                 {
-                    resource.AdditionalData["extension"] = new JArray(topics.Select(t => new JObject
-                    {
-                        ["url"] = SubscriptionsBackport.TopicCanonicalCapability,
-                        ["valueCanonical"] = t,
-                    }));
+                    resource.AdditionalData.Remove("extension");
+                    return;
                 }
+
+                resource.AdditionalData["extension"] = new JArray(topics.Select(t => new JObject
+                {
+                    ["url"] = SubscriptionsBackport.TopicCanonicalCapability,
+                    ["valueCanonical"] = t,
+                }));
             });
         }
 

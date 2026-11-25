@@ -44,8 +44,6 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         IPipelineBehavior<DeleteResourceRequest, DeleteResourceResponse>,
         IPipelineBehavior<ConditionalDeleteResourceRequest, DeleteResourceResponse>
     {
-        private static readonly HashSet<string> BaseResourceTypes = new(StringComparer.Ordinal) { KnownResourceTypes.Resource, KnownResourceTypes.DomainResource };
-
         private readonly SubscriptionsConfiguration _configuration;
         private readonly ISubscriptionModelConverter _converter;
         private readonly SubscriptionValidator _validator;
@@ -221,7 +219,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             foreach (string type in topic.ResourceTriggers.Select(t => SubscriptionMatcher.GetTypeName(t.Resource)).Distinct(StringComparer.Ordinal))
             {
                 // Base types need access to every resource type, which SMART expresses with the "all" scope.
-                string checkedType = BaseResourceTypes.Contains(type) ? "all" : type;
+                string checkedType = SubscriptionMatcher.IsBaseType(type) ? "all" : type;
                 if (!_authorizer.CanRead(grant, checkedType))
                 {
                     throw new UnauthorizedFhirActionException();
@@ -230,7 +228,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
 
             SubscriptionInfo existingInfo = TryConvert(existing);
             SubscriptionStatusCode status = DecideStatus(info, existingInfo, contentHash);
-            if (IsLive(status) && (existingInfo == null || !IsLive(existingInfo.Status)))
+            if (status.IsLive() && (existingInfo == null || !existingInfo.Status.IsLive()))
             {
                 // Any transition into a live status counts, so creating as off and then requesting cannot exceed the limit.
                 await EnsureCapacityAsync(cancellationToken);
@@ -241,7 +239,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             UpsertResourceResponse response = await next();
 
             string id = response.Outcome.RawResourceElement.Id;
-            if (IsLive(status))
+            if (status.IsLive())
             {
                 await _store.SaveGrantAsync(id, contentHash, grant.Serialize(), cancellationToken);
             }
@@ -255,9 +253,6 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
 
             return response;
         }
-
-        private static bool IsLive(SubscriptionStatusCode status) =>
-            status is SubscriptionStatusCode.Requested or SubscriptionStatusCode.Active or SubscriptionStatusCode.Error;
 
         private static SubscriptionStatusCode DecideStatus(SubscriptionInfo requested, SubscriptionInfo existing, string contentHash)
         {
@@ -293,7 +288,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         private async Task EnsureCapacityAsync(CancellationToken cancellationToken)
         {
             SubscriptionRegistrySnapshot snapshot = await _registry.GetAsync(TimeSpan.FromSeconds(_configuration.RegistryRefreshIntervalSeconds), cancellationToken);
-            int live = snapshot.Subscriptions.Count(s => s.Info?.Status is SubscriptionStatusCode.Requested or SubscriptionStatusCode.Active or SubscriptionStatusCode.Error);
+            int live = snapshot.Subscriptions.Count(s => s.Info?.Status.IsLive() == true);
             if (live >= _configuration.MaxActiveSubscriptions)
             {
                 throw new BadRequestException(string.Format(System.Globalization.CultureInfo.InvariantCulture, Core.Resources.SubscriptionLimitReached, _configuration.MaxActiveSubscriptions));
@@ -303,32 +298,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         private async Task<SubscriptionTopicInfo> FindTopicAsync(string canonical, CancellationToken cancellationToken)
         {
             // Read topics directly rather than from the registry, so a topic created moments ago is found.
-            var topics = new Dictionary<string, SubscriptionTopicInfo>(StringComparer.Ordinal);
-            foreach (ResourceElement resource in await _loader.GetTopicsAsync(cancellationToken))
-            {
-                if (!_converter.IsTopic(resource))
-                {
-                    continue;
-                }
-
-                try
-                {
-                    SubscriptionTopicInfo topic = _converter.ToTopic(resource);
-                    if (!string.IsNullOrEmpty(topic.Canonical))
-                    {
-                        topics[topic.Canonical] = topic;
-                        if (!string.IsNullOrEmpty(topic.Version))
-                        {
-                            topics[topic.VersionedCanonical] = topic;
-                        }
-                    }
-                }
-                catch (SubscriptionValidationException)
-                {
-                    // An invalid stored topic cannot be subscribed to.
-                }
-            }
-
+            Dictionary<string, SubscriptionTopicInfo> topics = _registry.BuildTopicMap(await _loader.GetTopicsAsync(cancellationToken));
             return SubscriptionRegistry.ResolveTopic(topics, canonical);
         }
 

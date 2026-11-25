@@ -15,11 +15,11 @@ using Medino;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Microsoft.Extensions.Primitives;
 using Microsoft.Health.Core.Features.Context;
 using Microsoft.Health.Fhir.Core.Configs;
 using Microsoft.Health.Fhir.Core.Extensions;
 using Microsoft.Health.Fhir.Core.Features.Context;
+using Microsoft.Health.Fhir.Core.Features.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Authorization;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Channels;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
@@ -176,7 +176,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
             if (subscription.Info == null)
             {
                 // An unparseable subscription is set to error once, and deactivated if needed.
-                return subscription.RawStatus is not ("error" or "off" or "entered-in-error") || state?.ActivationTransactionId != null;
+                return !SubscriptionStatusCodeExtensions.ParseSubscriptionStatus(subscription.RawStatus).IsErrorOrStopped() || state?.ActivationTransactionId != null;
             }
 
             SubscriptionStatusCode status = subscription.Info.Status;
@@ -273,7 +273,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
             if (info == null)
             {
                 await DeactivateAsync(subscription.Id, state, cancellationToken);
-                if (subscription.RawStatus is not ("error" or "off" or "entered-in-error"))
+                if (!SubscriptionStatusCodeExtensions.ParseSubscriptionStatus(subscription.RawStatus).IsErrorOrStopped())
                 {
                     SubscriptionInfo minimal = new() { Id = resource.Id, VersionId = resource.VersionId, Status = SubscriptionStatusCode.Requested };
                     await SetStatusAsync(minimal, SubscriptionStatusCode.Error, string.Join(" ", subscription.Errors), cancellationToken);
@@ -398,12 +398,17 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
                     continue;
                 }
 
+                static ResourceKey VersionKey(SubscriptionEventRecord record) =>
+                    new(record.ResourceType, record.ResourceId, record.ResourceVersion.ToString(CultureInfo.InvariantCulture));
+
+                IReadOnlyDictionary<ResourceKey, ResourceElement> contents = info.Content == SubscriptionContentLevel.FullResource
+                    ? await _loader.GetResourceVersionsAsync(authorized.Where(r => r.Interaction != SubscriptionInteraction.Delete).Select(VersionKey).Distinct().ToList(), cancellationToken)
+                    : null;
+
                 var events = new List<SubscriptionNotificationEvent>(authorized.Count);
                 foreach (SubscriptionEventRecord record in authorized)
                 {
-                    ResourceElement content = info.Content == SubscriptionContentLevel.FullResource && record.Interaction != SubscriptionInteraction.Delete
-                        ? await _loader.GetResourceVersionAsync(record.ResourceType, record.ResourceId, record.ResourceVersion, cancellationToken)
-                        : null;
+                    ResourceElement content = record.Interaction != SubscriptionInteraction.Delete ? contents?.GetValueOrDefault(VersionKey(record)) : null;
 
                     events.Add(new SubscriptionNotificationEvent
                     {
@@ -548,16 +553,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
 
         private void SetBackgroundRequestContext()
         {
-            _requestContextAccessor.RequestContext = new FhirRequestContext(
-                method: "SubscriptionDelivery",
-                uriString: "https://localhost/",
-                baseUriString: "https://localhost/",
-                correlationId: Activity.Current?.Id ?? Guid.NewGuid().ToString(),
-                requestHeaders: new Dictionary<string, StringValues>(),
-                responseHeaders: new Dictionary<string, StringValues>())
-            {
-                IsBackgroundTask = true,
-            };
+            _requestContextAccessor.RequestContext = SubscriptionBackgroundContext.Create("SubscriptionDelivery");
         }
     }
 }

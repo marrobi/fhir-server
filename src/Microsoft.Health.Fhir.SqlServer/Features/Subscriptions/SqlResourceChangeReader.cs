@@ -49,14 +49,15 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Subscriptions
         internal ISqlServerFhirModel Model => _model;
 
         /// <summary>
-        /// Reads every version a transaction wrote, including versions that are already history.
+        /// Reads every version the transactions in a range wrote, including versions that are already history, with the writing transaction.
         /// </summary>
-        /// <param name="transactionId">The transaction.</param>
+        /// <param name="firstTransactionId">The first transaction of the range.</param>
+        /// <param name="lastTransactionId">The last transaction of the range.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
         /// <returns>The versions.</returns>
-        public Task<IReadOnlyList<ResourceWrapper>> GetTransactionVersionsAsync(long transactionId, CancellationToken cancellationToken)
+        public Task<IReadOnlyList<(long TransactionId, ResourceWrapper Wrapper)>> GetTransactionVersionsAsync(long firstTransactionId, long lastTransactionId, CancellationToken cancellationToken)
         {
-            return _store.GetAllResourceVersionsByTransactionIdAsync(transactionId, _rawResourceConverter.ReadCompressedRawResource, _model.GetResourceTypeName, cancellationToken);
+            return _store.GetAllResourceVersionsByTransactionIdRangeAsync(firstTransactionId, lastTransactionId, _rawResourceConverter.ReadCompressedRawResource, _model.GetResourceTypeName, cancellationToken);
         }
 
         /// <summary>

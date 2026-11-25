@@ -159,15 +159,16 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Storage
         }
 
         /// <summary>
-        /// Returns every resource version written by a transaction, including versions that are already history and versions whose
-        /// content was removed (invisible), so the subscription event pump can evaluate exactly what each transaction wrote.
+        /// Returns every resource version written by the transactions in a range, with the transaction that wrote it, including versions
+        /// that are already history and versions whose content was removed (invisible), so the subscription event pump can evaluate
+        /// exactly what each transaction wrote.
         /// </summary>
-        internal async Task<IReadOnlyList<ResourceWrapper>> GetAllResourceVersionsByTransactionIdAsync(long transactionId, Func<MemoryStream, string> decompress, Func<short, string> getResourceTypeName, CancellationToken cancellationToken)
+        internal async Task<IReadOnlyList<(long TransactionId, ResourceWrapper Wrapper)>> GetAllResourceVersionsByTransactionIdRangeAsync(long firstTransactionId, long lastTransactionId, Func<MemoryStream, string> decompress, Func<short, string> getResourceTypeName, CancellationToken cancellationToken)
         {
-            await using var cmd = new SqlCommand() { CommandText = "dbo.GetResourcesByTransactionId", CommandType = CommandType.StoredProcedure, CommandTimeout = 600 };
-            cmd.Parameters.AddWithValue("@TransactionId", transactionId);
-            cmd.Parameters.AddWithValue("@IncludeHistory", true);
-            return await cmd.ExecuteReaderAsync(_sqlRetryService, (reader) => { return ReadResourceWrapper(reader, true, decompress, getResourceTypeName); }, _logger, cancellationToken);
+            await using var cmd = new SqlCommand() { CommandText = "dbo.GetResourcesByTransactionIdRange", CommandType = CommandType.StoredProcedure, CommandTimeout = 600 };
+            cmd.Parameters.AddWithValue("@FirstTransactionId", firstTransactionId);
+            cmd.Parameters.AddWithValue("@LastTransactionId", lastTransactionId);
+            return await cmd.ExecuteReaderAsync(_sqlRetryService, (reader) => (reader.GetInt64(10), ReadResourceWrapper(reader, true, decompress, getResourceTypeName)), _logger, cancellationToken);
         }
 
         /// <summary>

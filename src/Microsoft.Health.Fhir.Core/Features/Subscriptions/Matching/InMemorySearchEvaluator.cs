@@ -4,7 +4,6 @@
 // -------------------------------------------------------------------------------------------------
 
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -31,6 +30,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
     {
         private const string IdParameter = "_id";
         private const string LastUpdatedParameter = "_lastUpdated";
+        private const int CacheCapacity = 4096;
 
         private static readonly HashSet<string> UnsupportedParameters = new(StringComparer.Ordinal)
         {
@@ -49,13 +49,16 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
         private readonly IExpressionParser _expressionParser;
         private readonly ISearchIndexer _searchIndexer;
         private readonly ICompartmentIndexer _compartmentIndexer;
-        private readonly ConcurrentDictionary<(string ResourceType, string Key, string Value), Expression> _cache = new();
+
+        // Parsed parameters, keyed by values that come from subscription and topic writes, so the cache is bounded.
+        private readonly BoundedCache<(string ResourceType, string Key, string Value), Expression> _cache;
 
         public InMemorySearchEvaluator(IExpressionParser expressionParser, ISearchIndexer searchIndexer, ICompartmentIndexer compartmentIndexer)
         {
             _expressionParser = EnsureArg.IsNotNull(expressionParser, nameof(expressionParser));
             _searchIndexer = EnsureArg.IsNotNull(searchIndexer, nameof(searchIndexer));
             _compartmentIndexer = EnsureArg.IsNotNull(compartmentIndexer, nameof(compartmentIndexer));
+            _cache = new BoundedCache<(string ResourceType, string Key, string Value), Expression>(CacheCapacity, ParseExpression);
         }
 
         /// <summary>
@@ -161,25 +164,27 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
                 throw new SubscriptionCriteriaException(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionCriteriaParameterNotSupported, key));
             }
 
-            return _cache.GetOrAdd((resourceType, key, value), k =>
+            return _cache.GetOrAdd((resourceType, key, value));
+        }
+
+        private Expression ParseExpression((string ResourceType, string Key, string Value) parameter)
+        {
+            Expression expression;
+            try
             {
-                Expression expression;
-                try
-                {
-                    expression = _expressionParser.Parse([k.ResourceType], k.Key, k.Value);
-                }
-                catch (Exception ex) when (ex is not SubscriptionCriteriaException)
-                {
-                    throw new SubscriptionCriteriaException(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionCriteriaParameterInvalid, k.Key, k.Value, ex.Message), ex);
-                }
+                expression = _expressionParser.Parse([parameter.ResourceType], parameter.Key, parameter.Value);
+            }
+            catch (Exception ex) when (ex is not SubscriptionCriteriaException)
+            {
+                throw new SubscriptionCriteriaException(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionCriteriaParameterInvalid, parameter.Key, parameter.Value, ex.Message), ex);
+            }
 
-                if (!IsSupported(expression, topLevel: true))
-                {
-                    throw new SubscriptionCriteriaException(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionCriteriaParameterNotSupported, k.Key));
-                }
+            if (!IsSupported(expression, topLevel: true))
+            {
+                throw new SubscriptionCriteriaException(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionCriteriaParameterNotSupported, parameter.Key));
+            }
 
-                return expression;
-            });
+            return expression;
         }
 
         private static bool IsSupported(Expression expression, bool topLevel)

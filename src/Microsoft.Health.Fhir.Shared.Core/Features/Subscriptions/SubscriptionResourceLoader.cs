@@ -11,7 +11,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using EnsureThat;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Primitives;
 using Microsoft.Health.Core.Features.Context;
 using Microsoft.Health.Fhir.Core.Features.Context;
 using Microsoft.Health.Fhir.Core.Features.Persistence;
@@ -26,7 +25,6 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
     public sealed class SubscriptionResourceLoader : ISubscriptionResourceLoader
     {
         private const int PageSize = 500;
-        private const string InvisibleResource = " ";
 
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly IResourceDeserializer _deserializer;
@@ -65,9 +63,27 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             return await GetAsync(new ResourceKey(resourceType, id), cancellationToken);
         }
 
-        public async Task<ResourceElement> GetResourceVersionAsync(string resourceType, string id, int version, CancellationToken cancellationToken)
+        public async Task<IReadOnlyDictionary<ResourceKey, ResourceElement>> GetResourceVersionsAsync(IReadOnlyList<ResourceKey> keys, CancellationToken cancellationToken)
         {
-            return await GetAsync(new ResourceKey(resourceType, id, version.ToString(CultureInfo.InvariantCulture)), cancellationToken);
+            EnsureArg.IsNotNull(keys, nameof(keys));
+            var result = new Dictionary<ResourceKey, ResourceElement>();
+            if (keys.Count == 0)
+            {
+                return result;
+            }
+
+            using IServiceScope scope = _scopeFactory.CreateScope();
+            IFhirDataStore dataStore = scope.ServiceProvider.GetRequiredService<IFhirDataStore>();
+            foreach (ResourceWrapper wrapper in await dataStore.GetAsync(keys, cancellationToken))
+            {
+                // A deleted version has no content.
+                if (wrapper.RawResource?.Data != null && !wrapper.IsDeleted)
+                {
+                    result[new ResourceKey(wrapper.ResourceTypeName, wrapper.ResourceId, wrapper.Version)] = _deserializer.Deserialize(wrapper);
+                }
+            }
+
+            return result;
         }
 
         private async Task<ResourceElement> GetAsync(ResourceKey key, CancellationToken cancellationToken)
@@ -76,7 +92,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             IFhirDataStore dataStore = scope.ServiceProvider.GetRequiredService<IFhirDataStore>();
 
             ResourceWrapper wrapper = await dataStore.GetAsync(key, cancellationToken);
-            if (wrapper == null || wrapper.RawResource?.Data == null || wrapper.RawResource.Data == InvisibleResource)
+            if (wrapper == null || wrapper.RawResource?.Data == null)
             {
                 return null;
             }
@@ -90,16 +106,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             // The registry is shared by every caller, so it must not be filtered by the SMART scopes or compartment of whichever
             // request happens to trigger a load. Authorization of events uses each subscription's own grant instead.
             IFhirRequestContext callerContext = _requestContextAccessor.RequestContext;
-            _requestContextAccessor.RequestContext = new FhirRequestContext(
-                method: "SubscriptionRegistry",
-                uriString: "https://localhost/",
-                baseUriString: "https://localhost/",
-                correlationId: callerContext?.CorrelationId ?? Guid.NewGuid().ToString(),
-                requestHeaders: new Dictionary<string, StringValues>(),
-                responseHeaders: new Dictionary<string, StringValues>())
-            {
-                IsBackgroundTask = true,
-            };
+            _requestContextAccessor.RequestContext = SubscriptionBackgroundContext.Create("SubscriptionRegistry", callerContext?.CorrelationId);
 
             try
             {

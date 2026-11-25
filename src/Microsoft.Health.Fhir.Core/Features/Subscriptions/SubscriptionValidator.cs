@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Net.Http.Headers;
+using System.Runtime.CompilerServices;
 using EnsureThat;
 using Hl7.Fhir.Utility;
 using Microsoft.Extensions.Options;
@@ -38,8 +39,6 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             "Host", "Content-Type", "Content-Length", "Transfer-Encoding", "Connection", "Upgrade", "Expect", "TE", "Trailer", "Keep-Alive", "Proxy-Authorization", "Proxy-Connection",
         };
 
-        private static readonly HashSet<string> BaseResourceTypes = new(StringComparer.Ordinal) { "Resource", "DomainResource" };
-
         private static readonly string[] ComparatorPrefixes = Enum.GetValues<SearchComparator>().Select(c => c.GetLiteral()).ToArray();
 
         private readonly InMemorySearchEvaluator _searchEvaluator;
@@ -49,6 +48,9 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         private readonly IModelInfoProvider _modelInfoProvider;
         private readonly HashSet<string> _channelTypes;
         private readonly VersioningConfiguration _versioning;
+
+        // Topics are immutable and rebuilt with each registry snapshot; subscriptions sharing a topic reuse its validation.
+        private readonly ConditionalWeakTable<SubscriptionTopicInfo, IReadOnlyList<string>> _topicErrors = new();
 
         public SubscriptionValidator(
             InMemorySearchEvaluator searchEvaluator,
@@ -193,7 +195,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             {
                 errors.Add(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionTopicRetired, subscription.TopicCanonical));
             }
-            else if (ValidateTopic(topic).Count > 0)
+            else if (_topicErrors.GetValue(topic, ValidateTopic).Count > 0)
             {
                 errors.Add(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionTopicNotValid, subscription.TopicCanonical));
             }
@@ -280,7 +282,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
 
                 IReadOnlyList<string> types = filter.ResourceType != null
                     ? [filter.ResourceType]
-                    : topic.ResourceTriggers.Select(t => SubscriptionMatcher.GetTypeName(t.Resource)).Where(t => !BaseResourceTypes.Contains(t)).Distinct().ToList();
+                    : topic.ResourceTriggers.Select(t => SubscriptionMatcher.GetTypeName(t.Resource)).Where(t => !SubscriptionMatcher.IsBaseType(t)).Distinct().ToList();
 
                 string notAllowed = Comparators(filter, types)
                     .FirstOrDefault(comparator => !string.Equals(comparator, "eq", StringComparison.Ordinal) &&
@@ -336,19 +338,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
                 .Distinct(StringComparer.Ordinal);
         }
 
-        private bool AcceptsComparators(string resourceType, string code)
-        {
-            try
-            {
-                return _searchEvaluator.Parse(resourceType, [new KeyValuePair<string, string>(code + ":missing", "true")])
-                    .OfType<SearchParameterExpressionBase>()
-                    .Any(e => e.Parameter.Type is SearchParamType.Date or SearchParamType.Number or SearchParamType.Quantity);
-            }
-            catch (SubscriptionCriteriaException)
-            {
-                return false;
-            }
-        }
+        private bool AcceptsComparators(string resourceType, string code) =>
+            FindParameter(resourceType, code)?.Type is SearchParamType.Date or SearchParamType.Number or SearchParamType.Quantity;
 
         private void TryParseQuery(string resourceType, string query, List<string> errors)
         {
@@ -360,7 +351,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             try
             {
                 IReadOnlyList<KeyValuePair<string, string>> parameters = SubscriptionQueryParser.Parse(query, out string prefix);
-                if (prefix != null && !string.Equals(prefix, resourceType, StringComparison.Ordinal) && !BaseResourceTypes.Contains(resourceType))
+                if (prefix != null && !string.Equals(prefix, resourceType, StringComparison.Ordinal) && !SubscriptionMatcher.IsBaseType(resourceType))
                 {
                     errors.Add(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionTopicCriteriaTypeMismatch, query, resourceType));
                     return;
@@ -384,7 +375,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             static bool IsUnversioned(string policy) => string.Equals(policy, ResourceVersionPolicy.NoVersion, StringComparison.OrdinalIgnoreCase);
 
             // A base-type trigger covers every resource type, so any unversioned type breaks the guarantee.
-            if (BaseResourceTypes.Contains(type))
+            if (SubscriptionMatcher.IsBaseType(type))
             {
                 return !IsUnversioned(_versioning.Default) && !_versioning.ResourceTypeOverrides.Values.Any(IsUnversioned);
             }
@@ -393,18 +384,23 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         }
 
         private bool IsResourceType(string type) =>
-            !string.IsNullOrEmpty(type) && (BaseResourceTypes.Contains(type) || _modelInfoProvider.IsKnownResource(type, ignoreCase: false));
+            !string.IsNullOrEmpty(type) && (SubscriptionMatcher.IsBaseType(type) || _modelInfoProvider.IsKnownResource(type, ignoreCase: false));
 
-        private bool IsKnownParameter(string resourceType, string code)
+        private bool IsKnownParameter(string resourceType, string code) => FindParameter(resourceType, code) != null;
+
+        // Resolves the parameter as the in-memory evaluator would, so only parameters it can evaluate are found.
+        private SearchParameterInfo FindParameter(string resourceType, string code)
         {
             try
             {
-                _searchEvaluator.Parse(resourceType, [new KeyValuePair<string, string>(code + ":missing", "true")]);
-                return true;
+                return _searchEvaluator.Parse(resourceType, [new KeyValuePair<string, string>(code + ":missing", "true")])
+                    .OfType<SearchParameterExpressionBase>()
+                    .Select(e => e.Parameter)
+                    .FirstOrDefault();
             }
             catch (SubscriptionCriteriaException)
             {
-                return false;
+                return null;
             }
         }
 

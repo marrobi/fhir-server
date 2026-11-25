@@ -33,8 +33,6 @@ namespace Microsoft.Health.Fhir.Core.Features.Operations
 
         public const string PatientEverything = "patient-everything";
 
-        public const string SubscriptionStatus = "subscription-status";
-
         public const string SubscriptionStatusUri = "http://hl7.org/fhir/OperationDefinition/Subscription-status";
 
         public const string PatientEverythingUri = "https://www.hl7.org/fhir/patient-operation-everything.html";

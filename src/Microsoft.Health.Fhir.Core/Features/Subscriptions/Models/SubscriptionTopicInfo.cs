@@ -38,11 +38,6 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Models
         public bool HasEventTriggers { get; init; }
 
         /// <summary>
-        /// Gets a value indicating whether the topic declares a notification shape, which is not supported in v1 and is ignored.
-        /// </summary>
-        public bool HasNotificationShape { get; init; }
-
-        /// <summary>
         /// Gets the canonical with its version (<c>url|version</c>) when a version is present.
         /// </summary>
         public string VersionedCanonical => string.IsNullOrEmpty(Version) ? Canonical : Canonical + "|" + Version;

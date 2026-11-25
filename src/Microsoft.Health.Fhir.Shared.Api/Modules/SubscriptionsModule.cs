@@ -35,13 +35,6 @@ namespace Microsoft.Health.Fhir.Api.Modules
     /// </summary>
     public class SubscriptionsModule : IStartupModule
     {
-        private readonly FhirServerConfiguration _configuration;
-
-        public SubscriptionsModule(FhirServerConfiguration configuration)
-        {
-            _configuration = EnsureArg.IsNotNull(configuration, nameof(configuration));
-        }
-
         public void Load(IServiceCollection services)
         {
             EnsureArg.IsNotNull(services, nameof(services));

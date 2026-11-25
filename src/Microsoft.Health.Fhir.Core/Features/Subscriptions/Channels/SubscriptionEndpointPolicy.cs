@@ -104,6 +104,11 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Channels
             {
                 address = address.MapToIPv4();
             }
+            else if (TryGetEmbeddedIPv4(address, out IPAddress embedded))
+            {
+                // A translator or relay delivers these to the embedded IPv4 address, so that address decides.
+                return IsNonPublic(embedded);
+            }
 
             if (IPAddress.IsLoopback(address))
             {
@@ -132,10 +137,39 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Channels
                     || address.IsIPv6LinkLocal
                     || address.IsIPv6SiteLocal
                     || address.IsIPv6Multicast
-                    || (b[0] & 0xFE) == 0xFC; // unique local fc00::/7
+                    || (b[0] & 0xFE) == 0xFC // unique local fc00::/7
+                    || (b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xFF && b[3] == 0x9B && b[4] == 0x00 && b[5] == 0x01); // local-use NAT64 64:ff9b:1::/48
             }
 
             return true;
+        }
+
+        // IPv6 forms that carry an IPv4 address: IPv4-compatible ::/96 (which includes :: and ::1), the NAT64 well-known
+        // prefix 64:ff9b::/96 (RFC 6052) and 6to4 2002::/16 (RFC 3056).
+        private static bool TryGetEmbeddedIPv4(IPAddress address, out IPAddress ipv4)
+        {
+            ipv4 = null;
+            if (address.AddressFamily != AddressFamily.InterNetworkV6)
+            {
+                return false;
+            }
+
+            byte[] b = address.GetAddressBytes();
+            bool zeroTo12 = b.AsSpan(0, 12).IndexOfAnyExcept((byte)0) < 0;
+            bool nat64 = b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xFF && b[3] == 0x9B && b.AsSpan(4, 8).IndexOfAnyExcept((byte)0) < 0;
+            if (zeroTo12 || nat64)
+            {
+                ipv4 = new IPAddress(b.AsSpan(12, 4));
+                return true;
+            }
+
+            if (b[0] == 0x20 && b[1] == 0x02)
+            {
+                ipv4 = new IPAddress(b.AsSpan(2, 4));
+                return true;
+            }
+
+            return false;
         }
 
         private static bool HostMatches(string host, string allowed)

@@ -1206,6 +1206,9 @@
   <data name="SubscriptionStatusIdRequired" xml:space="preserve">
     <value>The $status operation needs at least one subscription id.</value>
   </data>
+  <data name="SubscriptionStatusTooManyIds" xml:space="preserve">
+    <value>The $status operation accepts at most {0} subscription ids.</value>
+  </data>
   <data name="SubscriptionUnevaluableEvents" xml:space="preserve">
     <value>{0} event(s) could not be evaluated because a resource version was no longer available; they were not sent.</value>
   </data>
