@@ -15,6 +15,7 @@ using Microsoft.Health.Fhir.Core.Models;
 using Microsoft.Health.Fhir.Tests.Common;
 using Microsoft.Health.Test.Utilities;
 using Xunit;
+using static Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions.SubscriptionNotificationTestData;
 using FhirParameters = Hl7.Fhir.Model.Parameters;
 
 namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
@@ -23,7 +24,6 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
     [Trait(Traits.Category, Categories.Subscriptions)]
     public class SubscriptionNotificationFactoryTests
     {
-        private static readonly Uri BaseUri = new("https://fhir.example/");
         private readonly SubscriptionNotificationFactory _factory = new();
 
         [Fact]
@@ -83,7 +83,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         [Fact]
         public void GivenFullResourceContent_WhenBuilt_ThenResourcesAreIncluded()
         {
-            Bundle bundle = Build(SubscriptionContentLevel.FullResource, Events(1, withResource: true));
+            Bundle bundle = Build(SubscriptionContentLevel.FullResource, Events(1, i => new Encounter { Id = "e" + i }));
 
             Assert.Equal("e1", bundle.Entry[1].Resource.Id);
         }
@@ -129,28 +129,6 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             string json = _factory.Serialize(_factory.CreateNotification(Request(content, events, SubscriptionNotificationType.EventNotification)), "application/fhir+json");
             return new FhirJsonParser().Parse<Bundle>(json);
         }
-
-        private static SubscriptionNotificationRequest Request(SubscriptionContentLevel content, SubscriptionNotificationEvent[] events, SubscriptionNotificationType type, string[] errors = null) => new()
-        {
-            Subscription = new SubscriptionInfo { Id = "s1", TopicCanonical = "http://example.org/topic", Content = content, Status = SubscriptionStatusCode.Active },
-            Type = type,
-            Status = SubscriptionStatusCode.Active,
-            EventsSinceSubscriptionStart = 8,
-            Events = events,
-            Errors = errors ?? [],
-            BaseUri = BaseUri,
-        };
-
-        private static SubscriptionNotificationEvent[] Events(int count, bool withResource = false) => Enumerable.Range(1, count).Select(i => new SubscriptionNotificationEvent
-        {
-            EventNumber = 6 + i,
-            Timestamp = DateTimeOffset.UtcNow,
-            ResourceType = "Encounter",
-            ResourceId = "e" + i,
-            ResourceVersion = i,
-            Interaction = i == 1 ? SubscriptionInteraction.Create : SubscriptionInteraction.Update,
-            Resource = withResource ? new Encounter { Id = "e" + i }.ToResourceElement() : null,
-        }).ToArray();
     }
 }
 #endif

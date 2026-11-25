@@ -16,9 +16,8 @@ import time
 import urllib.parse
 import uuid
 
-TOPIC_PREFIX = "http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic."
-TOPIC_BACKBONE_PREFIX = "http://hl7.org/fhir/4.3/StructureDefinition/extension-SubscriptionTopic."
-BACKPORT = "http://hl7.org/fhir/uv/subscriptions-backport/StructureDefinition/"
+from fhir_resources import backport_subscription, encounter, status_transition_topic
+
 TOPIC_URL = "http://example.org/fhir/SubscriptionTopic/benchmark-encounter-cancelled"
 HEADERS = {"Content-Type": "application/fhir+json", "Accept": "application/fhir+json", "Prefer": "return=minimal"}
 
@@ -36,57 +35,16 @@ class Client:
         return response.status, text
 
 
-def ext(url, **value):
-    return {"url": url, **value}
-
-
 def topic():
-    return {
-        "resourceType": "Basic",
-        "id": "benchmark-topic",
-        "modifierExtension": [ext(TOPIC_PREFIX + "status", valueCode="active")],
-        "code": {"coding": [{"system": "http://hl7.org/fhir/fhir-types", "code": "SubscriptionTopic"}]},
-        "extension": [
-            ext(TOPIC_PREFIX + "url", valueUri=TOPIC_URL),
-            {"url": TOPIC_BACKBONE_PREFIX + "resourceTrigger", "extension": [
-                ext("resource", valueUri="Encounter"),
-                ext("supportedInteraction", valueCode="create"),
-                ext("supportedInteraction", valueCode="update"),
-                {"url": "queryCriteria", "extension": [
-                    ext("previous", valueString="status:not=cancelled"),
-                    ext("resultForCreate", valueCode="test-passes"),
-                    ext("current", valueString="status=cancelled"),
-                    ext("requireBoth", valueBoolean=True),
-                ]},
-            ]},
-            {"url": TOPIC_BACKBONE_PREFIX + "canFilterBy", "extension": [ext("resource", valueUri="Encounter"), ext("filterParameter", valueString="subject")]},
-        ],
-    }
+    return status_transition_topic(TOPIC_URL, "cancelled", topic_id="benchmark-topic")
 
 
 def subscription(hook, patient):
-    return {
-        "resourceType": "Subscription",
-        "id": f"bench-{patient}",
-        "meta": {"profile": [BACKPORT + "backport-subscription"]},
-        "status": "requested",
-        "reason": "benchmark",
-        "criteria": TOPIC_URL,
-        "_criteria": {"extension": [ext(BACKPORT + "backport-filter-criteria", valueString=f"Encounter?subject=Patient/{patient}")]},
-        "channel": {
-            "extension": [ext(BACKPORT + "backport-heartbeat-period", valueUnsignedInt=3600), ext(BACKPORT + "backport-max-count", valuePositiveInt=20)],
-            "type": "rest-hook",
-            "endpoint": f"{hook}/bench",
-            "payload": "application/fhir+json",
-            "_payload": {"extension": [ext(BACKPORT + "backport-payload-content", valueCode="id-only")]},
-        },
-    }
+    return backport_subscription(TOPIC_URL, f"{hook}/bench", patient, content="id-only", max_count=20, reason="benchmark", subscription_id=f"bench-{patient}")
 
 
-def encounter(patient):
-    return {"resourceType": "Encounter", "id": uuid.uuid4().hex, "status": "cancelled",
-            "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "AMB"},
-            "subject": {"reference": f"Patient/{patient}"}}
+def new_encounter(patient):
+    return encounter(uuid.uuid4().hex, patient, "cancelled")
 
 
 def parallel(base, count, concurrency, work):
@@ -148,14 +106,14 @@ def write(base, writes, concurrency, patients, bundle_size):
     patients = max(1, patients)
     if bundle_size <= 1:
         def work(c, i):
-            resource = encounter(f"p{i % patients}")
+            resource = new_encounter(f"p{i % patients}")
             return c.send("PUT", f"Encounter/{resource['id']}", resource)
         calls = writes
     else:
         def work(c, i):
             entries = []
             for j in range(bundle_size):
-                resource = encounter(f"p{(i * bundle_size + j) % patients}")
+                resource = new_encounter(f"p{(i * bundle_size + j) % patients}")
                 entries.append({"fullUrl": f"urn:uuid:{uuid.uuid4()}", "resource": resource, "request": {"method": "PUT", "url": f"Encounter/{resource['id']}"}})
             return c.send("POST", "", {"resourceType": "Bundle", "type": "transaction", "entry": entries})
         calls = writes // bundle_size

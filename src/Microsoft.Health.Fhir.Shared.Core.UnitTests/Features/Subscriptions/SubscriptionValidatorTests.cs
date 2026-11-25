@@ -69,6 +69,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         [InlineData("NotAType", null)]
         [InlineData("Subscription", null)]
         [InlineData("Encounter", "subject.name=x")]
+        [InlineData("Encounter", "_has:Observation:encounter:status=final")]
         [InlineData("Encounter", "code:in=http://vs")]
         [InlineData("Encounter", "Patient?gender=male")]
         public void GivenAnUnsupportedTrigger_WhenValidated_ThenItIsRejected(string resource, string current)
@@ -129,6 +130,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             yield return [With(filters: [new SubscriptionFilter { FilterParameter = "status", Value = "finished" }])];
             yield return [With(filters: [new SubscriptionFilter { FilterParameter = "subject", Modifier = "missing", Value = "true" }])];
             yield return [With(filters: [new SubscriptionFilter { FilterParameter = "subject" }])];
+            yield return [With(filters: [new SubscriptionFilter { ResourceType = "Observation", FilterParameter = "subject", Value = "Patient/p1" }])];
         }
 
         [Theory]

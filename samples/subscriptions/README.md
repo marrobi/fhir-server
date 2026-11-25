@@ -28,7 +28,8 @@ docker compose exec webhook python /app/e2e_r4_backport.py http://fhir-api:8080 
 
 It creates a topic (an R4 `Basic` resource), an `id-only` rest-hook subscription, and checks the handshake,
 one notification for a matching Encounter transition, `$status`, a failing endpoint moving to `error`, a new handshake
-after an endpoint change, and that deleting the subscription stops notifications.
+after an endpoint change, and that deleting the subscription stops notifications. It deletes the topic and subscriptions
+it created when it finishes. The scripts share their topic, subscription and Encounter builders in [fhir_resources.py](fhir_resources.py).
 
 To check what a topic can trigger on and filter by, run (works with `FHIR_VERSION` R4, R4B or R5):
 

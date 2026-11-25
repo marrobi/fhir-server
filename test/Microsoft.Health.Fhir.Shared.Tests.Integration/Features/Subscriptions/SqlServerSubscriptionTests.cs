@@ -56,26 +56,6 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
         }
 
         [Fact]
-        public async Task GivenAGrant_WhenTheContentHashChanges_ThenTheActivationIsCleared()
-        {
-            // Arrange
-            await Store.SaveGrantAsync("s1", "hash-a", "{}", CancellationToken.None);
-            long activation = await Store.ActivateAsync("s1", CancellationToken.None);
-
-            // Act
-            await Store.SaveGrantAsync("s1", "hash-a", "{\"a\":1}", CancellationToken.None);
-            SubscriptionState sameContent = await Store.GetStateAsync("s1", CancellationToken.None);
-            await Store.SaveGrantAsync("s1", "hash-b", "{}", CancellationToken.None);
-            SubscriptionState newContent = await Store.GetStateAsync("s1", CancellationToken.None);
-
-            // Assert
-            Assert.Equal(activation, sameContent.ActivationTransactionId);
-            Assert.Equal("{\"a\":1}", sameContent.Grant);
-            Assert.Null(newContent.ActivationTransactionId);
-            Assert.Equal("hash-b", newContent.ContentHash);
-        }
-
-        [Fact]
         public async Task GivenAnActivatedSubscription_WhenActivatedAgain_ThenTheWatermarkIsKept()
         {
             await Store.SaveGrantAsync("s1", "h", "{}", CancellationToken.None);
@@ -95,17 +75,16 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
         public async Task GivenEvents_WhenEnqueuedAndReplayed_ThenNumbersAreContiguousAndNotDuplicated()
         {
             // Arrange
-            await Store.SaveGrantAsync("s1", "h", "{}", CancellationToken.None);
-            await Store.SaveGrantAsync("s2", "h", "{}", CancellationToken.None);
-            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100");
+            await ActivateAtAsync("s1");
+            await ActivateAtAsync("s2");
             IReadOnlyList<SubscriptionEventCandidate> batch =
             [
                 Candidate("s1", 101, 1), Candidate("s2", 101, 1), Candidate("s1", 102, 2), Candidate("s1", 100, 3), Candidate("s1", 103, 4),
             ];
 
             // Act: the second call simulates a crash after commit and a replay of the same batch.
-            await Store.EnqueueAsync(batch, 103, CancellationToken.None);
-            await Store.EnqueueAsync(batch, 103, CancellationToken.None);
+            await Store.EnqueueAsync(batch, SqlServerSubscriptionStore.CursorId, 103, null, CancellationToken.None);
+            await Store.EnqueueAsync(batch, SqlServerSubscriptionStore.CursorId, 103, null, CancellationToken.None);
 
             // Assert
             IReadOnlyList<SubscriptionEventRecord> s1 = await Store.GetPendingEventsAsync("s1", 100, CancellationToken.None);
@@ -113,7 +92,7 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
             Assert.Equal([101L, 102L, 103L], s1.Select(e => e.TransactionId).ToArray());
             Assert.Single(await Store.GetPendingEventsAsync("s2", 100, CancellationToken.None));
             Assert.Equal(3, (await Store.GetStateAsync("s1", CancellationToken.None)).LastEventNumber);
-            Assert.Equal(103, await Store.GetCursorAsync(CancellationToken.None));
+            Assert.Equal(103, await Store.GetCursorAsync(SqlServerSubscriptionStore.CursorId, CancellationToken.None));
         }
 
         [Fact]
@@ -121,7 +100,7 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
         {
             await Store.SaveGrantAsync("s1", "h", "{}", CancellationToken.None);
 
-            await Store.EnqueueAsync([Candidate("s1", 101, 1), Candidate("unknown", 101, 2)], 101, CancellationToken.None);
+            await Store.EnqueueAsync([Candidate("s1", 101, 1), Candidate("unknown", 101, 2)], SqlServerSubscriptionStore.CursorId, 101, null, CancellationToken.None);
 
             Assert.Empty(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None));
             Assert.Empty(await Store.GetPendingEventsAsync("unknown", 10, CancellationToken.None));
@@ -130,24 +109,20 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
         [Fact]
         public async Task GivenACursor_WhenAnOlderPositionIsCommitted_ThenItNeverMovesBackwards()
         {
-            await Store.EnqueueAsync([], 500, CancellationToken.None);
-            await Store.EnqueueAsync([], 400, CancellationToken.None);
+            await Store.EnqueueAsync([], SqlServerSubscriptionStore.CursorId, 500, null, CancellationToken.None);
+            await Store.EnqueueAsync([], SqlServerSubscriptionStore.CursorId, 400, null, CancellationToken.None);
 
-            Assert.Equal(500, await Store.GetCursorAsync(CancellationToken.None));
+            Assert.Equal(500, await Store.GetCursorAsync(SqlServerSubscriptionStore.CursorId, CancellationToken.None));
         }
 
         [Fact]
         public async Task GivenASubscriptionActivatedAfterTheStatesWereRead_WhenEventsAreEnqueued_ThenNothingIsWrittenAndTheCallerMustRetry()
         {
             // Arrange: the pump reads the counter, then a handshake activates s2 before the pump commits.
-            await Store.SaveGrantAsync("s1", "h", "{}", CancellationToken.None);
-            await Store.ActivateAsync("s1", CancellationToken.None);
-            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100 WHERE SubscriptionId = 's1'");
-            await Store.EnqueueAsync([], 100, CancellationToken.None);
+            await ActivateAtAsync("s1");
+            await Store.EnqueueAsync([], SqlServerSubscriptionStore.CursorId, 100, null, CancellationToken.None);
             long version = await Store.GetActivationVersionAsync(CancellationToken.None);
-            await Store.SaveGrantAsync("s2", "h", "{}", CancellationToken.None);
-            await Store.ActivateAsync("s2", CancellationToken.None);
-            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100 WHERE SubscriptionId = 's2'");
+            await ActivateAtAsync("s2");
 
             // Act
             bool committed = await Store.EnqueueAsync([Candidate("s1", 101, 1)], SqlServerSubscriptionStore.CursorId, 101, version, CancellationToken.None);
@@ -157,150 +132,52 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
             Assert.False(committed);
             Assert.True(retried);
             Assert.Single(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None));
-            Assert.Equal(101, await Store.GetCursorAsync(CancellationToken.None));
+            Assert.Equal(101, await Store.GetCursorAsync(SqlServerSubscriptionStore.CursorId, CancellationToken.None));
         }
 
         [Fact]
-        public async Task GivenPendingEvents_WhenTheSubscriptionContentChanges_ThenTheyAreRetiredAndNeverSentUnderTheNewContent()
+        public async Task GivenALeaseHeldByAnotherWorker_WhenItExpires_ThenItCanBeAcquired()
         {
-            // Arrange
-            await Store.SaveGrantAsync("s1", "h1", "{}", CancellationToken.None);
-            await Store.ActivateAsync("s1", CancellationToken.None);
-            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100 WHERE SubscriptionId = 's1'");
-            await Store.EnqueueAsync([Candidate("s1", 101, 1), Candidate("s1", 102, 2)], 102, CancellationToken.None);
-
-            // Act: an API update changes the endpoint, so the hash changes.
-            await Store.SaveGrantAsync("s1", "h2", "{}", CancellationToken.None);
-            await Store.ActivateAsync("s1", CancellationToken.None);
-            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100 WHERE SubscriptionId = 's1'");
-
-            // Assert
-            Assert.Empty(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None));
-            Assert.Equal(2, ExecuteScalar<int>("SELECT count(*) FROM dbo.SubscriptionEvents WHERE SubscriptionId = 's1' AND Status = 3"));
-        }
-
-        [Fact]
-        public async Task GivenPendingEvents_WhenTheSameContentIsSavedAgain_ThenTheyStayPending()
-        {
-            await Store.SaveGrantAsync("s1", "h1", "{}", CancellationToken.None);
-            await Store.ActivateAsync("s1", CancellationToken.None);
-            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100 WHERE SubscriptionId = 's1'");
-            await Store.EnqueueAsync([Candidate("s1", 101, 1)], 101, CancellationToken.None);
-
-            await Store.SaveGrantAsync("s1", "h1", "{}", CancellationToken.None);
-
-            Assert.Single(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None));
-        }
-
-        [Fact]
-        public async Task GivenAnActivatedSubscription_WhenDeactivatedWithRevocation_ThenTheGrantIsRemovedAndPendingEventsAreRetired()
-        {
-            // Arrange
-            await Store.SaveGrantAsync("s1", "h1", "{\"ContentHash\":\"h1\"}", CancellationToken.None);
-            await Store.ActivateAsync("s1", CancellationToken.None);
-            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100 WHERE SubscriptionId = 's1'");
-            await Store.EnqueueAsync([Candidate("s1", 101, 1)], 101, CancellationToken.None);
-
-            // Act
-            await Store.DeactivateAsync("s1", revokeGrant: true, CancellationToken.None);
-
-            // Assert
-            SubscriptionState state = await Store.GetStateAsync("s1", CancellationToken.None);
-            Assert.Null(state.ActivationTransactionId);
-            Assert.Null(state.Grant);
-            Assert.Null(state.ContentHash);
-            Assert.Empty(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None));
-        }
-
-        [Fact]
-        public async Task GivenPendingEvents_WhenDueSubscriptionsAreListed_ThenOnlyActivatedSubscriptionsWithADueEventAreReturned()
-        {
-            // Arrange: s1 is activated with a due event; s2 has a pending event but was deactivated (no revocation).
-            await Store.SaveGrantAsync("s1", "h", "{}", CancellationToken.None);
-            await Store.ActivateAsync("s1", CancellationToken.None);
-            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100 WHERE SubscriptionId = 's1'");
-            await Store.SaveGrantAsync("s2", "h", "{}", CancellationToken.None);
-            await Store.ActivateAsync("s2", CancellationToken.None);
-            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100 WHERE SubscriptionId = 's2'");
-            await Store.EnqueueAsync([Candidate("s1", 101, 1), Candidate("s2", 101, 2)], 101, CancellationToken.None);
-            await Store.DeactivateAsync("s2", revokeGrant: false, CancellationToken.None);
-
-            // Act
-            IReadOnlyList<string> due = await Store.GetSubscriptionsWithDueEventsAsync(CancellationToken.None);
-
-            // Assert
-            Assert.Equal(["s1"], due);
-        }
-
-        [Fact]
-        public async Task GivenALease_WhenAnotherWorkerTries_ThenItIsExclusiveUntilReleasedOrExpired()
-        {
+            // Exclusivity and release are covered by the store contract tests.
             Assert.True(await Store.TryAcquireLeaseAsync("s1", "w1", TimeSpan.FromMinutes(1), CancellationToken.None));
-            Assert.True(await Store.TryAcquireLeaseAsync("s1", "w1", TimeSpan.FromMinutes(1), CancellationToken.None));
-            Assert.False(await Store.TryAcquireLeaseAsync("s1", "w2", TimeSpan.FromMinutes(1), CancellationToken.None));
-
-            await Store.ReleaseLeaseAsync("s1", "w2", CancellationToken.None);
-            Assert.False(await Store.TryAcquireLeaseAsync("s1", "w2", TimeSpan.FromMinutes(1), CancellationToken.None));
-
-            await Store.ReleaseLeaseAsync("s1", "w1", CancellationToken.None);
-            Assert.True(await Store.TryAcquireLeaseAsync("s1", "w2", TimeSpan.FromSeconds(1), CancellationToken.None));
 
             ExecuteSql("UPDATE dbo.SubscriptionStates SET LeaseEndDate = dateadd(second,-5,getUTCdate()) WHERE SubscriptionId = 's1'");
-            Assert.True(await Store.TryAcquireLeaseAsync("s1", "w3", TimeSpan.FromMinutes(1), CancellationToken.None));
-        }
 
-        [Fact]
-        public async Task GivenPendingEvents_WhenAttemptsFailAndSucceed_ThenStatusAttemptsAndDueTimesAreTracked()
-        {
-            // Arrange
-            await Store.SaveGrantAsync("s1", "h", "{}", CancellationToken.None);
-            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100");
-            await Store.EnqueueAsync([Candidate("s1", 101, 1), Candidate("s1", 102, 2), Candidate("s1", 103, 3, SubscriptionEventStatus.Unevaluable)], 103, CancellationToken.None);
-
-            // Act
-            await Store.RecordFailedAttemptAsync("s1", [1], DateTimeOffset.UtcNow.AddMinutes(5), "HTTP 503", CancellationToken.None);
-            await Store.SetEventStatusAsync("s1", [2], SubscriptionEventStatus.Delivered, CancellationToken.None);
-
-            // Assert
-            SubscriptionEventRecord first = Assert.Single(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None));
-            Assert.Equal(1, first.Attempts);
-            Assert.Empty(await Store.GetSubscriptionsWithDueEventsAsync(CancellationToken.None));
-            Assert.Equal(new SubscriptionEventCounts(1, 1), await Store.GetEventCountsAsync("s1", CancellationToken.None));
-
-            // Activation makes retained events due again.
-            await Store.ActivateAsync("s1", CancellationToken.None);
-            Assert.Equal(["s1"], await Store.GetSubscriptionsWithDueEventsAsync(CancellationToken.None));
-            Assert.Equal(0, Assert.Single(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None)).Attempts);
+            Assert.True(await Store.TryAcquireLeaseAsync("s1", "w2", TimeSpan.FromMinutes(1), CancellationToken.None));
         }
 
         [Fact]
         public async Task GivenOldNonPendingEvents_WhenCleanedUp_ThenOnlyPendingAndRecentEventsRemain()
         {
-            await Store.SaveGrantAsync("s1", "h", "{}", CancellationToken.None);
-            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100");
-            await Store.EnqueueAsync([Candidate("s1", 101, 1), Candidate("s1", 102, 2), Candidate("s1", 103, 3)], 103, CancellationToken.None);
+            await ActivateAtAsync("s1");
+            await Store.EnqueueAsync([Candidate("s1", 101, 1), Candidate("s1", 102, 2), Candidate("s1", 103, 3)], SqlServerSubscriptionStore.CursorId, 103, null, CancellationToken.None);
             await Store.SetEventStatusAsync("s1", [1, 2], SubscriptionEventStatus.Delivered, CancellationToken.None);
             ExecuteSql("UPDATE dbo.SubscriptionEvents SET StatusDate = dateadd(day,-30,getUTCdate()) WHERE EventNumber IN (1,3)");
 
-            await Store.CleanupEventsAsync(7, CancellationToken.None);
+            bool startedWithoutBudget = await Store.CleanupEventsAsync(7, TimeSpan.Zero, CancellationToken.None);
+            Assert.False(startedWithoutBudget);
+            Assert.Equal(3, ExecuteScalar<int>("SELECT count(*) FROM dbo.SubscriptionEvents"));
+
+            Assert.True(await Store.CleanupEventsAsync(7, null, CancellationToken.None));
 
             Assert.Equal(2, ExecuteScalar<int>("SELECT count(*) FROM dbo.SubscriptionEvents"));
             Assert.Equal(0, ExecuteScalar<int>("SELECT count(*) FROM dbo.SubscriptionEvents WHERE EventNumber = 1"));
         }
 
         [Fact]
-        public async Task GivenASubscription_WhenItsStateIsDeleted_ThenItsEventsAreDeletedToo()
+        public async Task GivenMoreEventsThanOneDeleteBatch_WhenTheStateIsDeleted_ThenAllEventsAndTheStateAreRemoved()
         {
-            await Store.SaveGrantAsync("s1", "h", "{}", CancellationToken.None);
-            ExecuteSql("UPDATE dbo.SubscriptionStates SET ActivationTransactionId = 100");
-            await Store.EnqueueAsync([Candidate("s1", 101, 1)], 101, CancellationToken.None);
-            await Store.SetErrorAsync("s1", "boom", CancellationToken.None);
-            Assert.Equal("boom", (await Store.GetStateAsync("s1", CancellationToken.None)).Error);
+            // Arrange: more events than one 4,000-row batch.
+            await ActivateAtAsync("s1");
+            await Store.EnqueueAsync(Enumerable.Range(1, 4500).Select(i => Candidate("s1", 100 + i, i)).ToList(), SqlServerSubscriptionStore.CursorId, 4600, null, CancellationToken.None);
+            Assert.Equal(4500, ExecuteScalar<int>("SELECT count(*) FROM dbo.SubscriptionEvents WHERE SubscriptionId = 's1'"));
 
+            // Act
             await Store.DeleteStateAsync("s1", CancellationToken.None);
 
+            // Assert
             Assert.Null(await Store.GetStateAsync("s1", CancellationToken.None));
-            Assert.Equal(0, ExecuteScalar<int>("SELECT count(*) FROM dbo.SubscriptionEvents"));
+            Assert.Equal(0, ExecuteScalar<int>("SELECT count(*) FROM dbo.SubscriptionEvents WHERE SubscriptionId = 's1'"));
         }
 
         [Fact]
@@ -393,7 +270,7 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
 
             // Act
             await pump.PumpAsync(CancellationToken.None);
-            long? heldCursor = await Store.GetCursorAsync(CancellationToken.None);
+            long? heldCursor = await Store.GetCursorAsync(SqlServerSubscriptionStore.CursorId, CancellationToken.None);
             Assert.Empty(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None));
 
             Configuration.TransactionReadLagSeconds = 0;
@@ -448,7 +325,7 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
             SubscriptionEventWatchdog pump = CreatePump("true");
             await AdvanceVisibilityAsync();
             await pump.PumpAsync(CancellationToken.None);
-            long start = (await Store.GetCursorAsync(CancellationToken.None)).Value;
+            long start = (await Store.GetCursorAsync(SqlServerSubscriptionStore.CursorId, CancellationToken.None)).Value;
             ExecuteSql($@"
 INSERT INTO dbo.Transactions (SurrogateIdRangeFirstValue, SurrogateIdRangeLastValue, IsCompleted, IsSuccess, IsVisible, EndDate, VisibleDate)
 SELECT {start} + 10 * n, {start} + 10 * n + 9, 1, 1, 1, getUTCdate(), getUTCdate()
@@ -460,7 +337,7 @@ SELECT {start} + 10 * n, {start} + 10 * n + 9, 1, 1, 1, getUTCdate(), getUTCdate
 
             // Assert
             Assert.True(processed >= 10050, $"processed={processed}");
-            Assert.Equal(visibility, await Store.GetCursorAsync(CancellationToken.None));
+            Assert.Equal(visibility, await Store.GetCursorAsync(SqlServerSubscriptionStore.CursorId, CancellationToken.None));
         }
 
         [Fact]

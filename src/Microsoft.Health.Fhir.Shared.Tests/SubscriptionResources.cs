@@ -148,7 +148,7 @@ namespace Microsoft.Health.Fhir.Tests.Common
 #endif
         }
 
-        public static string Subscription(string topicUrl, string endpoint, string content = "id-only", string filter = null, string status = "requested", string id = null, int heartbeat = 120, DateTimeOffset? end = null, string contentType = "application/fhir+json", IReadOnlyList<string> filters = null)
+        public static string Subscription(string topicUrl, string endpoint, string content = "id-only", string filter = null, string status = "requested", string id = null, int heartbeat = 120, DateTimeOffset? end = null, string contentType = "application/fhir+json", IReadOnlyList<string> filters = null, bool withoutEnd = false)
         {
             var allFilters = new List<string>(filters ?? []);
             if (filter != null)
@@ -242,7 +242,10 @@ namespace Microsoft.Health.Fhir.Tests.Common
             }
 
             // API writes always store an end within the server's maximum lifetime.
-            subscription["end"] = (end ?? DateTimeOffset.UtcNow.AddDays(7)).ToString("o", System.Globalization.CultureInfo.InvariantCulture);
+            if (!withoutEnd)
+            {
+                subscription["end"] = (end ?? DateTimeOffset.UtcNow.AddDays(7)).ToString("o", System.Globalization.CultureInfo.InvariantCulture);
+            }
 
             return subscription.ToString();
         }

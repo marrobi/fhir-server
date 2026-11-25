@@ -23,7 +23,8 @@ import re
 import time
 import uuid
 
-from e2e_r4_backport import BACKPORT, FHIR, HOOK_FOR_SERVER, HOOK_LOCAL, TOPIC_BACKBONE_PREFIX, TOPIC_PREFIX, call, ext, notifications, status_of, wait_for
+from e2e_r4_backport import FHIR, HOOK_FOR_SERVER, HOOK_LOCAL, call, notifications, status_of, wait_for
+from fhir_resources import BACKPORT, TOPIC_BACKBONE_PREFIX, TOPIC_PREFIX, ext
 
 QUIET_SECONDS = 8
 REFERENCE = re.compile(r"([A-Z][A-Za-z]+)/([0-9a-f]{32})")

@@ -10,7 +10,6 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Hl7.Fhir.Model;
 using Microsoft.Health.Fhir.Core.Extensions;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Channels;
@@ -24,7 +23,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
     /// <summary>
     /// In-memory subscription store with the same contract as the SQL store.
     /// </summary>
-    internal sealed class InMemorySubscriptionStore : ISubscriptionStore
+    public sealed class InMemorySubscriptionStore : ISubscriptionStore
     {
         private readonly object _sync = new();
 
@@ -66,7 +65,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             lock (_sync)
             {
                 SubscriptionState current = States.GetValueOrDefault(subscriptionId);
-                if (current != null && current.ContentHash != contentHash)
+                if ((current?.ContentHash ?? string.Empty) != contentHash)
                 {
                     RetirePending(subscriptionId);
                 }
@@ -237,7 +236,15 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         {
             lock (_sync)
             {
-                return Task.FromResult<IReadOnlyList<string>>(Events.Where(e => e.Status == SubscriptionEventStatus.Pending && e.NextAttemptUtc <= Clock.UtcNow).Select(e => e.SubscriptionId).Distinct().ToList());
+                // As GetSubscriptionsWithDueEvents: activated subscriptions whose oldest pending event is due.
+                return Task.FromResult<IReadOnlyList<string>>(States.Values
+                    .Where(s => s.ActivationTransactionId != null)
+                    .Where(s => Events
+                        .Where(e => e.SubscriptionId == s.SubscriptionId && e.Status == SubscriptionEventStatus.Pending)
+                        .OrderBy(e => e.EventNumber)
+                        .FirstOrDefault() is { } oldest && oldest.NextAttemptUtc <= Clock.UtcNow)
+                    .Select(s => s.SubscriptionId)
+                    .ToList());
             }
         }
 

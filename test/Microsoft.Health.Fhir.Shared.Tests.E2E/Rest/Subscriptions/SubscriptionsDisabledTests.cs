@@ -97,8 +97,11 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
         public async Task GivenSubscriptionsAreDisabled_WhenATopicWithCriteriaTheFeatureRejectsIsWritten_ThenItIsStored()
         {
             Assert.SkipWhen(!_fixture.IsUsingInProcTestServer, "The feature setting of a remote server is not known.");
-            string body = SubscriptionResources.Topic($"http://example.org/topics/off-{Guid.NewGuid():N}", Guid.NewGuid().ToString("N"))
-                .Replace("status=cancelled\"", "subject:Patient.name=x\"", StringComparison.Ordinal);
+            string body = SubscriptionResources.Topic(
+                $"http://example.org/topics/off-{Guid.NewGuid():N}",
+                Guid.NewGuid().ToString("N"),
+                [new TopicTrigger("Encounter", ["update"]) { Current = "subject:Patient.name=x" }],
+                [new TopicFilter("Encounter", "subject")]);
 
             (HttpStatusCode code, JObject topic) = await SendAsync(HttpMethod.Post, TopicType, body);
 

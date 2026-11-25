@@ -95,8 +95,6 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             var basic = new Basic { Id = "b1", Code = new CodeableConcept("http://example.org", "other") };
 
             Assert.False(_converter.IsTopic(basic.ToResourceElement()));
-            Assert.Equal("Basic", _converter.TopicResourceType);
-            Assert.Equal("code", Assert.Single(_converter.TopicSearchParameters).Item1);
         }
 
         [Fact]
@@ -110,13 +108,6 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             };
 
             Assert.Throws<SubscriptionValidationException>(() => _converter.ToSubscription(subscription.ToResourceElement()));
-        }
-#else
-        [Fact]
-        public void GivenTheServerVersion_WhenAskedForTheTopicResource_ThenItIsSubscriptionTopic()
-        {
-            Assert.Equal("SubscriptionTopic", _converter.TopicResourceType);
-            Assert.Empty(_converter.TopicSearchParameters);
         }
 #endif
 

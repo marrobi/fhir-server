@@ -12,6 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Hl7.Fhir.Model;
 using Microsoft.Health.Fhir.Core.Extensions;
+using Microsoft.Health.Fhir.Core.Features.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Channels;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
@@ -62,8 +63,10 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         public Task<ResourceElement> GetResourceAsync(string resourceType, string id, CancellationToken cancellationToken) =>
             Task.FromResult(Resources.GetValueOrDefault((resourceType, id)));
 
-        public Task<ResourceElement> GetResourceVersionAsync(string resourceType, string id, int version, CancellationToken cancellationToken) =>
-            Task.FromResult(Versions.GetValueOrDefault((resourceType, id, version)));
+        public Task<IReadOnlyDictionary<ResourceKey, ResourceElement>> GetResourceVersionsAsync(IReadOnlyList<ResourceKey> keys, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyDictionary<ResourceKey, ResourceElement>>(keys
+                .Where(k => Versions.ContainsKey((k.ResourceType, k.Id, int.Parse(k.VersionId, CultureInfo.InvariantCulture))))
+                .ToDictionary(k => k, k => Versions[(k.ResourceType, k.Id, int.Parse(k.VersionId, CultureInfo.InvariantCulture))]));
 
         public Task<bool> SetStatusAsync(string subscriptionId, string expectedVersionId, SubscriptionStatusCode status, string error, CancellationToken cancellationToken)
         {

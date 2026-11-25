@@ -75,6 +75,13 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         [InlineData("0.0.0.0", true)]
         [InlineData("224.0.0.1", true)]
         [InlineData("198.18.0.1", true)]
+        [InlineData("64:ff9b::a9fe:a9fe", true)] // NAT64 of 169.254.169.254
+        [InlineData("64:ff9b::808:808", false)] // NAT64 of 8.8.8.8
+        [InlineData("64:ff9b:1::808:808", true)] // local-use NAT64
+        [InlineData("2002:0a00:0001::1", true)] // 6to4 of 10.0.0.1
+        [InlineData("2002:0808:0808::1", false)] // 6to4 of 8.8.8.8
+        [InlineData("::a9fe:a9fe", true)] // IPv4-compatible 169.254.169.254
+        [InlineData("::", true)]
         public void GivenAnAddress_WhenCheckingIfNonPublic_ThenReservedRangesAreDetected(string address, bool expected)
         {
             Assert.Equal(expected, SubscriptionEndpointPolicy.IsNonPublic(IPAddress.Parse(address)));

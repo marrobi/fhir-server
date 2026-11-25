@@ -4,6 +4,7 @@
 // -------------------------------------------------------------------------------------------------
 
 using System;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -35,6 +36,11 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest
     /// </summary>
     public class InProcTestFhirServer : TestFhirServer
     {
+        /// <summary>
+        /// The delivery attempts an in-proc server with subscriptions makes before it sets a subscription to error.
+        /// </summary>
+        internal const int SubscriptionMaxDeliveryAttempts = 2;
+
         private readonly Func<Task> _cleanupDatabase;
         private readonly IConfiguration _builtConfiguration;
 
@@ -67,7 +73,7 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest
                 configuration["FhirServer:Subscriptions:PumpPeriodSeconds"] = "0.5";
                 configuration["FhirServer:Subscriptions:TransactionReadLagSeconds"] = "0";
                 configuration["FhirServer:Subscriptions:RetryBaseDelaySeconds"] = "0.5";
-                configuration["FhirServer:Subscriptions:MaxDeliveryAttempts"] = "2";
+                configuration["FhirServer:Subscriptions:MaxDeliveryAttempts"] = SubscriptionMaxDeliveryAttempts.ToString(CultureInfo.InvariantCulture);
                 configuration["FhirServer:Subscriptions:MinHeartbeatPeriodSeconds"] = "2";
             }
 

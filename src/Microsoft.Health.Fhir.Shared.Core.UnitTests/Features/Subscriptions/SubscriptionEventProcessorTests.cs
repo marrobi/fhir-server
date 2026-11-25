@@ -151,7 +151,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             var change = SubscriptionTestFixture.Change(new Hl7.Fhir.Model.Subscription { Id = "s1" }, transactionId: 101);
 
             Assert.Empty(_processor.Process([change], [subscription]));
-            Assert.False(SubscriptionEventProcessor.IsCovered([subscription], "Subscription"));
+            Assert.False(SubscriptionEventProcessor.CreateCoverage([subscription])("Subscription"));
         }
 
         [Fact]
@@ -204,7 +204,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         [InlineData("Patient", false)]
         public void GivenMatchableSubscriptions_WhenCheckingCoverage_ThenOnlyTriggeredTypesAreRead(string type, bool expected)
         {
-            Assert.Equal(expected, SubscriptionEventProcessor.IsCovered([Subscription("s1")], type));
+            Assert.Equal(expected, SubscriptionEventProcessor.CreateCoverage([Subscription("s1")])(type));
         }
 
         private static ResourceChange Change(string patient = "p1", long transactionId = 101)

@@ -37,6 +37,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SqlServerSubscriptionPumpCrashTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SqlServerSubscriptionTestBase.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SqlServerSubscriptionTests.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SqlServerSubscriptionStoreContractTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionChangeCaptureFixture.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Persistence\ExpiredResourceCleanupWatchdogTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Persistence\QueryPlanReuseCheckerTests.cs" />

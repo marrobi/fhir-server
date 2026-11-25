@@ -114,31 +114,17 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
 
         private Bundle Build(SubscriptionNotificationType type, SubscriptionContentLevel content, int events, string[] errors)
         {
-            var request = new SubscriptionNotificationRequest
-            {
-                Subscription = new SubscriptionInfo { Id = "s1", TopicCanonical = "http://example.org/topic", Content = content, Status = SubscriptionStatusCode.Active },
-                Type = type,
-                Status = SubscriptionStatusCode.Active,
-                EventsSinceSubscriptionStart = 8,
-                Events = Enumerable.Range(1, events).Select(i => new SubscriptionNotificationEvent
+            SubscriptionNotificationRequest request = SubscriptionNotificationTestData.Request(
+                content,
+                SubscriptionNotificationTestData.Events(events, i => new Encounter
                 {
-                    EventNumber = 6 + i,
-                    Timestamp = DateTimeOffset.UtcNow,
-                    ResourceType = "Encounter",
-                    ResourceId = "e" + i,
-                    ResourceVersion = i,
-                    Interaction = i == 1 ? SubscriptionInteraction.Create : SubscriptionInteraction.Update,
-                    Resource = new Encounter
-                    {
-                        Id = "e" + i,
-                        Meta = new Meta { VersionId = i.ToString(System.Globalization.CultureInfo.InvariantCulture) },
-                        Status = Encounter.EncounterStatus.Cancelled,
-                        Class = new Coding("http://terminology.hl7.org/CodeSystem/v3-ActCode", "AMB"),
-                    }.ToResourceElement(),
-                }).ToArray(),
-                Errors = errors,
-                BaseUri = new Uri("https://fhir.example/"),
-            };
+                    Id = "e" + i,
+                    Meta = new Meta { VersionId = i.ToString(System.Globalization.CultureInfo.InvariantCulture) },
+                    Status = Encounter.EncounterStatus.Cancelled,
+                    Class = new Coding("http://terminology.hl7.org/CodeSystem/v3-ActCode", "AMB"),
+                }),
+                type,
+                errors);
 
             string json = _factory.Serialize(_factory.CreateNotification(request), "application/fhir+json");
             return new FhirJsonParser().Parse<Bundle>(json);

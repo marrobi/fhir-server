@@ -99,13 +99,13 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         [Fact]
         public async Task GivenAnInvalidTopic_WhenCreated_ThenItIsRejected()
         {
-            string json = SubscriptionResources.Topic(TopicUrl).Replace("status=cancelled", "subject.name=x", StringComparison.Ordinal);
+            string json = SubscriptionResources.Topic(TopicUrl, "t1", [new TopicTrigger("Encounter", ["update"]) { Current = "subject.name=x" }], [new TopicFilter("Encounter", "subject")]);
 
             await Assert.ThrowsAsync<BadRequestException>(() => CreateAsync(Parse(json)));
         }
 
         [Fact]
-        public async Task GivenAValidSubscription_WhenCreated_ThenStatusIsRequestedIdOnlyIsDefaultedEndIsCappedAndAGrantIsSaved()
+        public async Task GivenAValidSubscription_WhenCreated_ThenStatusIsRequestedIdOnlyIsDefaultedAndAGrantIsSaved()
         {
             // Arrange
             _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
@@ -119,11 +119,34 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             SubscriptionInfo info = _converter.ToSubscription(written);
             Assert.Equal(SubscriptionStatusCode.Requested, info.Status);
             Assert.Equal(SubscriptionContentLevel.IdOnly, info.Content);
-            Assert.NotNull(info.End);
-            Assert.True(info.End <= DateTimeOffset.UtcNow.AddDays(30).AddMinutes(1));
             SubscriptionGrant grant = SubscriptionGrant.Deserialize(_store.States["new-id"].Grant);
             Assert.Equal(info.ComputeContentHash(), grant.ContentHash);
             Assert.Equal("https://fhir.example/", grant.RequestBase);
+        }
+
+        [Theory]
+        [InlineData(null, 30)] // no end: the maximum lifetime
+        [InlineData(365, 30)] // beyond the maximum lifetime: capped
+        [InlineData(7, 7)] // within the maximum lifetime: kept
+        public async Task GivenASubscriptionEnd_WhenCreated_ThenItIsLimitedToTheMaximumLifetime(int? requestedDays, int expectedDays)
+        {
+            // Arrange
+            _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            ResourceElement subscription = Parse(SubscriptionResources.Subscription(
+                TopicUrl,
+                Endpoint,
+                end: requestedDays.HasValue ? now.AddDays(requestedDays.Value) : null,
+                withoutEnd: !requestedDays.HasValue));
+
+            // Act
+            ResourceElement written = null;
+            await CreateAsync(subscription, r => written = r);
+
+            // Assert
+            DateTimeOffset? end = _converter.ToSubscription(written).End;
+            Assert.NotNull(end);
+            Assert.InRange(end.Value, now.AddDays(expectedDays).AddMinutes(-1), now.AddDays(expectedDays).AddMinutes(1));
         }
 
         [Fact]

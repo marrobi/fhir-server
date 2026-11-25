@@ -10,6 +10,7 @@ using System.Threading;
 using Microsoft.Health.Fhir.Core.Configs;
 using Microsoft.Health.Fhir.Core.Extensions;
 using Microsoft.Health.Fhir.Core.Features.Persistence;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions.Events;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Models;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence;
 using Microsoft.Health.Fhir.Core.Messages.Delete;
@@ -106,13 +107,36 @@ INSERT INTO dbo.ResourceChangeData (Timestamp, ResourceId, ResourceTypeId, Resou
         }
 
         [Fact]
+        public async Task GivenAPageThatIsReadAgain_WhenItSpansOlderPartitions_ThenNoRecordIsSkipped()
+        {
+            // Arrange: a change recorded five hours ago and a current one, as on a quiet server; they are in different hour partitions.
+            ResourceChangeDataEventSource source = CreateChangeFeedSource();
+            long start = ExecuteScalar<long>("SELECT isnull(max(Id), 0) FROM dbo.ResourceChangeData");
+            ExecuteSql($@"
+DECLARE @TypeId smallint = (SELECT ResourceTypeId FROM dbo.ResourceType WHERE Name = 'Observation')
+INSERT INTO dbo.ResourceChangeData (Timestamp, ResourceId, ResourceTypeId, ResourceVersion, ResourceChangeTypeId)
+  VALUES (dateadd(hour, -5, sysutcdatetime()), '{Guid.NewGuid()}', @TypeId, 1, 0)
+INSERT INTO dbo.ResourceChangeData (Timestamp, ResourceId, ResourceTypeId, ResourceVersion, ResourceChangeTypeId)
+  VALUES (sysutcdatetime(), '{Guid.NewGuid()}', @TypeId, 1, 0)");
+            TransactionEventPage first = await source.ReadAsync(start, 10, null, CancellationToken.None);
+
+            // Act: the page was not committed, for example because a subscription was activated meanwhile, so it is read again.
+            TransactionEventPage retried = await source.ReadAsync(start, 10, null, CancellationToken.None);
+
+            // Assert
+            Assert.Equal(2, first.PositionCount);
+            Assert.Equal(2, retried.PositionCount);
+            Assert.Equal(first.LastPosition, retried.LastPosition);
+        }
+
+        [Fact]
         public async Task GivenADatabaseStartedWithTheTransactionsSource_WhenTheChangeFeedSourceIsConfigured_ThenThePumpDoesNotRunAndKeepsTheCursor()
         {
             // Arrange
             Configuration.EventSource = SubscriptionEventSource.Transactions;
             await AdvanceVisibilityAsync();
             await CreatePump("true").PumpAsync(CancellationToken.None);
-            long? transactionsCursor = await Store.GetCursorAsync(CancellationToken.None);
+            long? transactionsCursor = await Store.GetCursorAsync(SqlServerSubscriptionStore.CursorId, CancellationToken.None);
             await ActivateSubscriptionAsync("s1");
             await CreateObservationAsync("preliminary");
 
@@ -126,7 +150,7 @@ INSERT INTO dbo.ResourceChangeData (Timestamp, ResourceId, ResourceTypeId, Resou
             Assert.Equal(0, first + second);
             Assert.Empty(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None));
             Assert.Null(await Store.GetCursorAsync(ResourceChangeDataEventSource.ChangeFeedCursorId, CancellationToken.None));
-            Assert.Equal(transactionsCursor, await Store.GetCursorAsync(CancellationToken.None));
+            Assert.Equal(transactionsCursor, await Store.GetCursorAsync(SqlServerSubscriptionStore.CursorId, CancellationToken.None));
             Assert.Equal(nameof(SubscriptionEventSource.Transactions), await Store.GetEventSourceAsync(CancellationToken.None));
         }
     }

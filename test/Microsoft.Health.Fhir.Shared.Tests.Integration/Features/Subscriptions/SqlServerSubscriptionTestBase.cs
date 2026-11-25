@@ -167,11 +167,37 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
             return new TransactionsEventSource(reader, Options.Create(Configuration), XUnitLogger<TransactionsEventSource>.Create(Output), Metrics) { LateCheckPeriod = TimeSpan.Zero };
         }
 
+        private protected ResourceChangeDataEventSource CreateChangeFeedSource()
+        {
+            var reader = new SqlResourceChangeReader(
+                Sql.SqlServerFhirDataStore.StoreClient,
+                Sql.SqlServerFhirModel,
+                new CompressedRawResourceConverter(),
+                Fixture.Deserializer,
+                XUnitLogger<SqlResourceChangeReader>.Create(Output));
+            var changeFeed = new SqlServerFhirResourceChangeDataStore(Sql.SqlConnectionWrapperFactory, NullLogger<SqlServerFhirResourceChangeDataStore>.Instance, Sql.SchemaInformation);
+            return new ResourceChangeDataEventSource(changeFeed, reader, Options.Create(new CoreFeatureConfiguration { SupportsResourceChangeCapture = ChangeCaptureEnabled }));
+        }
+
         protected async Task ActivateSubscriptionAsync(string id)
         {
             await Store.SaveGrantAsync(id, Converter.Subscription.ComputeContentHash(), new SubscriptionGrant { ContentHash = Converter.Subscription.ComputeContentHash() }.Serialize(), CancellationToken.None);
             await AdvanceVisibilityAsync();
             await Store.ActivateAsync(id, CancellationToken.None);
+        }
+
+        /// <summary>
+        /// Grants and activates a subscription with its watermark at <paramref name="activationTransactionId"/>, so store tests can
+        /// enqueue events for small transaction ids without writing resources.
+        /// </summary>
+        /// <param name="id">The subscription id.</param>
+        /// <param name="activationTransactionId">The activation watermark.</param>
+        /// <returns>A task.</returns>
+        protected async Task ActivateAtAsync(string id, long activationTransactionId = 100)
+        {
+            await Store.SaveGrantAsync(id, "h", "{}", CancellationToken.None);
+            await Store.ActivateAsync(id, CancellationToken.None);
+            ExecuteSql($"UPDATE dbo.SubscriptionStates SET ActivationTransactionId = {activationTransactionId} WHERE SubscriptionId = '{id}'");
         }
 
         protected async Task<string> CreateObservationAsync(string status) => await CreateAsync("Observation", Guid.NewGuid().ToString(), status);
@@ -298,7 +324,8 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Features.Subscriptions
 
             public Task<ResourceElement> GetResourceAsync(string resourceType, string id, CancellationToken cancellationToken) => Task.FromResult<ResourceElement>(null);
 
-            public Task<ResourceElement> GetResourceVersionAsync(string resourceType, string id, int version, CancellationToken cancellationToken) => Task.FromResult<ResourceElement>(null);
+            public Task<IReadOnlyDictionary<ResourceKey, ResourceElement>> GetResourceVersionsAsync(IReadOnlyList<ResourceKey> keys, CancellationToken cancellationToken) =>
+                Task.FromResult<IReadOnlyDictionary<ResourceKey, ResourceElement>>(new Dictionary<ResourceKey, ResourceElement>());
         }
     }
 }
