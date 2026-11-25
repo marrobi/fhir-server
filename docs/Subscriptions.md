@@ -2,16 +2,18 @@
 
 The FHIR server can notify clients over HTTPS when resources change, using the [R5 topic-based subscriptions framework](https://hl7.org/fhir/R5/subscriptions.html). On R4 and R4B it follows the [Subscriptions R5 Backport IG](https://hl7.org/fhir/uv/subscriptions-backport/). The design and its trade-offs are in [ADR-2611](arch/adr-2611-fhir-subscriptions.md).
 
-The feature is **off by default** and needs the **SQL Server** data store with schema version 123 or later. When it is off, `Subscription` and topic resources are stored like any other resource and nothing is sent. When it is on but the store cannot be used, `Subscription` writes and `$status` fail (405 Method Not Allowed on other data stores; 503 while the database schema is still being upgraded) and nothing is advertised in the CapabilityStatement.
+**Design status:** the ADR is proposed. This guide describes the feature-branch implementation, not a released feature. Product group decisions and the [release gate](arch/Proposals/fhir-subscriptions-design.md#7-v1-release-gate) remain open.
+
+The feature is **off by default**. It needs the **SQL Server** data store with schema version 123 or later. When off, `Subscription` and topic resources use normal resource storage, no notifications are sent, and `$status` returns 405 Method Not Allowed. When enabled on another data store, subscription writes and `$status` return 405. While a schema upgrade is pending, they return 503 Service Unavailable. The CapabilityStatement advertises subscriptions when the feature is enabled on a data store that supports them, including while a schema upgrade is pending. On R4, the topic-canonical extensions are refreshed when the CapabilityStatement is rebuilt.
 
 ## What is supported
 
 | Area | Supported | Not supported |
 |------|-----------|---------------|
 | FHIR versions | R4 (Backport), R4B (Backport), R5 | STU3 |
-| Topics | Defined through the API: `SubscriptionTopic` on R4B and R5; on R4 a `Basic` resource with code `http://hl7.org/fhir/fhir-types#SubscriptionTopic` and cross-version topic extensions, laid out as HAPI FHIR does (see [R4 topic profile](#r4-topic-profile)) | Event triggers, topics on `Subscription`, server-only topics |
-| Triggers | `resourceTrigger` with `supportedInteraction` (`create`, `update`, `delete`), `queryCriteria` (`previous`, `current`, `resultForCreate`, `resultForDelete`, `requireBoth`) and `fhirPathCriteria` (with `%previous` and `%current`) | Chained, reverse-chained (`_has`), composite, terminology (`:in`, `:below` …) and result parameters; these are rejected when the topic is written |
-| Filters | `canFilterBy` on the topic; `filterBy` (R5) or `_criteria` filter extension (Backport) on the subscription, evaluated in memory with the same limits as criteria. Each filter must use a parameter, modifier and comparator the topic allows; on Backport a comparator is the search prefix of a date, number or quantity value (for example `date=gt2026-01-01`) | |
+| Topics | Defined through the API: `SubscriptionTopic` on R4B/R5; a `Basic` resource on R4 (see [R4 topic profile](#r4-topic-profile)) | Event triggers, topics on `Subscription`, topics loaded only from configuration |
+| Triggers | `resourceTrigger` with `supportedInteraction` (`create`, `update`, soft `delete`), `queryCriteria` (`previous`, `current`, `resultForCreate`, `resultForDelete`, `requireBoth`) and `fhirPathCriteria` (`%previous`, `%current`) | Chained, reverse-chained (`_has`), composite, terminology (`:in`, `:below`) and result parameters; unsupported criteria are rejected when written |
+| Filters | Topic `canFilterBy`; subscription `filterBy` on R5 or `backport-filter-criteria` extension on R4/R4B. Filters run in memory and must use parameters, modifiers and comparators allowed by the topic. Backport comparators use search prefixes, for example `date=gt2026-01-01`. | Same criteria limits as triggers |
 | Subscriptions | Topic-based only (`criteria` is the topic canonical on R4) | Classic R4 criteria-based subscriptions (rejected with 400) |
 | Channels | `rest-hook` | `websocket`, `email`, `message` |
 | Payload | `empty`, `id-only` (default), `full-resource`; `application/fhir+json` or `application/fhir+xml` | |
@@ -20,29 +22,35 @@ The feature is **off by default** and needs the **SQL Server** data store with s
 
 ## How it works
 
-1. A client writes a topic, then a `Subscription` that references it. The server validates both, sets `status` to `requested` and caps `end` at `MaxLifetimeDays`. The server owns `status`: a client may only set `off` or `entered-in-error`.
-2. The server records an **authorization grant** for the subscription from the caller's identity, roles, SMART scopes and compartment. Every event is checked against this grant (and against the *current* role configuration) before it is numbered, so a subscriber never learns about a resource it could not read.
+1. A client writes a topic, then a `Subscription` that references it. The server validates both, sets a new activation request to `requested`, and caps `end` at `MaxLifetimeDays`. Clients may request activation or retry with `requested`, or stop with `off` or `entered-in-error`. Only the server sets `active` or `error`.
+2. The server records an **authorization grant** from the caller's identity, roles, SMART scopes and compartment. It checks each event against this grant and the current role configuration before assigning an event number.
 3. The server sends a **handshake**. A 2xx response makes the subscription `active`; anything else moves it to `error`.
-4. A background **pump** reads committed transactions, matches each written version against the active subscriptions in memory, and queues events per subscription. Matching never adds work to the write path.
-5. A delivery service sends queued events in order, up to `maxCount` per notification, retries with back-off, and moves the subscription to `error` after `MaxDeliveryAttempts`. Undelivered events are kept; set `status` back to `requested` to retry. After `MaxErrorHours` in `error`, the subscription is set to `off` and its pending events are discarded.
-6. Changing the endpoint, channel, topic, filters or content of a subscription needs a new grant and a new handshake. Events still pending from before the change are not sent: they were matched and authorized for the previous content.
-7. Setting `status` to `off` or `entered-in-error`, or reaching `end`, removes the grant and retires pending events, so writing the subscription back without the API (for example with `$import`) cannot reactivate it. The registry also re-checks that every stored subscription has an `end` within `MaxLifetimeDays`.
-8. Each subscription is handled by one worker at a time. The worker renews its lease before every notification, for longer than that notification's timeout.
+4. A background **pump** reads the configured event source, matches available committed versions in memory, and queues events per subscription. Matching and delivery add no synchronous step to other resource writes. Subscription and topic API writes still need validation and grant handling.
+5. A background service sends events in event-number order, up to `maxCount` per notification. It retries failed sends with increasing delays. After `MaxDeliveryAttempts`, it sets `error` and pauses delivery; later events cannot pass the failed event. Set `status` to `requested` for a new handshake and retry. Pending events stay until recovery or deactivation. After `MaxErrorHours` in `error`, the server sets `off` and discards them.
+6. Changing the endpoint, channel, topic, filters or content needs a new grant and handshake. Old pending events are retired because they were matched and authorized for different content. The grant is bound to the accepted content hash and endpoint, not to every resource version created by server status updates.
+7. Setting `off` or `entered-in-error`, deleting the subscription, or reaching `end` revokes the grant and retires pending events. An imported resource cannot create a new grant. The registry validates stored resources again, including their lifetime. Without a valid grant, no handshake or notification is sent; background validation corrects status to `off` or `error`. A raw resource read may show stale status until that check runs.
+8. Each subscription has one delivery worker at a time. Before every send, the worker renews its lease for longer than the send timeout. It checks authorization again to catch local revocation.
 
-`$status` reports `status`, `eventsSinceSubscriptionStart` and, on failure, the error.
+`$status` reports `status`, `eventsSinceSubscriptionStart` and, on failure, the error. The type-level form accepts at most `CoreFeatures:MaxItemCountPerSearch` ids.
+
+Delivery is best-effort. Retries reuse event numbers, but a client may receive a notification more than once or not at all. Clients remove duplicates by event number and re-query resources to recover from gaps. `$status` does not replay events; `$events` is planned for later.
 
 ### History requirement
 
-The pump matches the exact versions written, including earlier versions when a resource is updated several times before the pump reads them. That needs the resource type to keep history (`versioned` or `versioned-update`). For `no-version` types, `UnversionedResourceTypes` decides:
+The pump needs resource history to match exact versions after rapid updates. Resource types should keep history (`versioned` or `versioned-update`). For `no-version` types, `UnversionedResourceTypes` controls whether topics are accepted:
 
-- `AllowWithGaps` (default): topics may trigger on them. A version replaced before the pump reads it cannot be evaluated: it is counted as unevaluable, reported by `$status`, and not sent, so subscribers see a gap in event numbers.
-- `RequireHistory`: topics that trigger on a `no-version` type (or on `Resource`/`DomainResource` while any type is `no-version`) are rejected, so every notification is matched against the exact version written. Existing topics are re-checked when the registry loads them, and their subscriptions move to `error`.
+- `AllowWithGaps` (default): topics may trigger on these types. If a change record remains but a required version is missing, the pump can record an unevaluable event. The topic must cover the change, and the grant must allow reading that resource type without compartment or search-parameter scope restrictions. `$status` reports the failure. The event takes a number but is not sent, so clients can detect a gap.
+- `RequireHistory`: topics on `no-version` types are rejected. This includes `Resource`/`DomainResource` triggers while any covered type is `no-version`. Stored topics are checked again on load, and affected subscriptions move to `error`.
 
-While subscriptions are enabled, invisible history is kept for at least `MaxHistoryCleanupHoldHours`.
+Neither setting guarantees complete history. If a write or cleanup deletes the change row itself, the source cannot report it and no numbered gap is guaranteed. Metadata-only updates without history can also remove required versions. Restricted subscribers receive no numbered gap for an unevaluable change because it could reveal a resource they cannot read.
+
+While enabled, the feature keeps invisible history for at least `MaxHistoryCleanupHoldHours` (default 24). Cleanup does not wait for the pump cursor. A longer backlog can therefore lose versions. This hold does not preserve rows deleted during a `no-version` write.
 
 ### Historical versions from `$import`
 
-`$import` can load a resource's history: versions older than the current one are stored directly as history. Those versions describe past changes, so by default they do not notify. Set `NotifyHistoricalVersions` to `true` to treat them like any other write. A version counts as written as history when a later version of the same resource was already written by the same or an earlier transaction.
+`$import` can store older resource versions directly as history. These describe past changes and do not notify by default. With the `Transactions` source, set `NotifyHistoricalVersions=true` to include them. The change feed does not record these versions, so the setting has no effect with `ResourceChangeData`.
+
+A version counts as written as history when a later version of the same resource was already written by the same or an earlier transaction. Ordinary writes that become history after a later update are not excluded by this setting.
 
 ### Event source
 
@@ -50,12 +58,16 @@ The pump reads committed changes through an event source, selected by `EventSour
 
 | Source | Reads | Trade-offs |
 |--------|-------|------------|
-| `Transactions` (default) | `dbo.Transactions` up to the visibility watermark, then every version each transaction wrote | Covers every write path, including `$import` and bulk operations. Notifications wait for the oldest incomplete transaction. |
+| `Transactions` (default) | `dbo.Transactions` up to the visibility watermark and configured read delay, then available versions for each transaction | Covers REST, bundle, `$import` and bulk write paths. History and clock limits still apply. Notifications wait for the oldest incomplete transaction. |
 | `ResourceChangeData` | The `ResourceChangeData` change feed | Needs `CoreFeatures:SupportsResourceChangeCapture`; without it the pump logs an error and does not run. Covers only what the change feed records (it omits versions written as history). Its reader takes a table lock that can block concurrent writes. The feed itself is only read, never changed. |
 
-Transaction ids are taken from the SQL Server clock when a transaction begins. If that clock steps back, a later write can get a lower id than one the pump has already passed. The `Transactions` source therefore stays `TransactionReadLagSeconds` behind the newest transactions, and matches changes up to the same margin before a subscription's activation. A write that commits more than that margin after its id was taken is not notified; the pump counts these in `Subscriptions.LateTransactions` and logs a warning. Changes made shortly before activation may therefore also notify.
+Transaction IDs use the SQL Server clock at transaction start. A backward clock step can give a later write an ID below the saved cursor. The `Transactions` source delays reads by `TransactionReadLagSeconds` (default 5) to reduce this risk. The same margin applies before activation, so changes shortly before activation may notify.
 
-The source is fixed when the pump first runs against a database. If a different source is configured later, the pump logs an error and stops matching changes until the original source is set back. Changes made in the meantime are matched when it resumes, as after any other pause of the pump. Changing the source of an existing database is not supported.
+A transaction that commits below a cursor already passed is not notified. The pump counts it in `Subscriptions.LateTransactions` and logs a warning. A normal long-running transaction holds back visibility; it is not skipped simply because it runs longer than the read delay.
+
+On first run, the pump starts at visibility, or at the earliest existing activation watermark if lower. It then saves its progress after each matched page.
+
+The source is fixed on first use of a database. A different source setting stops matching and logs an error. Restoring the original setting resumes from the saved cursor, but only records and versions still retained can be matched. Changing the source of an existing database is not supported.
 
 ## Configuration
 
@@ -68,17 +80,17 @@ Settings are under `FhirServer:Subscriptions`.
 | `AllowPrivateNetworkEndpoints` | `false` | Allow endpoints that resolve to loopback, private or link-local addresses. Dev/test only. |
 | `AllowedEndpointHosts` | empty | If set, only these hosts (or subdomains, for entries starting with `*.`) can receive notifications. |
 | `MaxActiveSubscriptions` | `1000` | Limit on subscriptions in `requested`, `active` or `error`. |
-| `MaxLifetimeDays` | `365` | Maximum time until `end`. |
+| `MaxLifetimeDays` | `365` | Maximum time until `end`. `0` disables the limit. |
 | `MaxEventsPerNotification` | `20` | Upper bound on `maxCount` (which defaults to 1). |
 | `MinHeartbeatPeriodSeconds` | `60` | Shortest heartbeat period a subscription may request. |
 | `DefaultTimeoutSeconds` / `MaxTimeoutSeconds` | `30` / `120` | Endpoint timeout when not set, and the maximum allowed. |
 | `MaxDeliveryAttempts` | `5` | Attempts before a subscription moves to `error`. |
 | `RetryBaseDelaySeconds` | `2` | Base for exponential retry back-off. |
-| `EventRetentionDays` | `7` | How long delivered events are kept. Pending events are kept until delivered, the subscription is deleted, or it is turned off. |
+| `EventRetentionDays` | `7` | How long completed event records are kept, including delivered, unevaluable and no-longer-authorized events. Pending events stay until delivery or deactivation; content changes also retire old pending events. |
 | `MaxErrorHours` | `72` | How long a subscription may stay in `error` before it is set to `off` and its pending events are discarded. `0` disables the limit. |
 | `MaxHistoryCleanupHoldHours` | `24` | Minimum invisible-history retention while subscriptions are enabled. |
 | `PumpPeriodSeconds` / `PumpTransactionBatchSize` | `1` / `100` | Pump tick, and the number of transactions or change records per batch. |
-| `TransactionReadLagSeconds` | `5` | How far the `Transactions` source stays behind the newest transactions, and the margin before activation. Adds this much notification latency. See [Event source](#event-source). |
+| `TransactionReadLagSeconds` | `5` | Read delay for `Transactions` and the margin before activation. Adds this delay to notifications. See [Event source](#event-source). |
 | `EventSource` | `Transactions` | Where the pump reads committed changes: `Transactions` or `ResourceChangeData`. See [Event source](#event-source). |
 | `NotifyHistoricalVersions` | `false` | Whether versions written directly as history, such as `$import` loading earlier versions, notify. |
 | `UnversionedResourceTypes` | `AllowWithGaps` | `AllowWithGaps` or `RequireHistory` for topics on `no-version` resource types. See [History requirement](#history-requirement). |
@@ -89,11 +101,11 @@ Endpoints must be absolute `https://` URLs with no user information. Every resol
 
 The capacity defaults (`MaxActiveSubscriptions`, `PumpPeriodSeconds`, `PumpTransactionBatchSize`, `MaxEventsPerNotification`, `TransactionReadLagSeconds`) are provisional: they have not been sized by a benchmark on a representative deployment.
 
-The defaults for `EventSource`, `NotifyHistoricalVersions`, `UnversionedResourceTypes` and `MaxLifetimeDays` are the open product-group decisions in [ADR-2611](arch/adr-2611-fhir-subscriptions.md); each is a setting so the decision can change without code changes.
+The product group must confirm the defaults for `EventSource`, `NotifyHistoricalVersions`, `UnversionedResourceTypes` and `MaxLifetimeDays` before accepting [ADR-2611](arch/adr-2611-fhir-subscriptions.md). These are settings, but `EventSource` cannot change after first use of a database.
 
 ## R4 topic profile
 
-On R4, topics are `Basic` resources described by the StructureDefinition `http://fhir.microsoft.com/StructureDefinition/subscription-topic-basic` ([source](../src/Microsoft.Health.Fhir.R4.Core/Features/Subscriptions/StructureDefinition-subscription-topic-basic.json)). The extensions follow the layout HAPI FHIR uses, so the same topic can be written to either server:
+R4 has no `SubscriptionTopic` resource type. This server uses `Basic` with code `http://hl7.org/fhir/fhir-types#SubscriptionTopic` and the StructureDefinition `http://fhir.microsoft.com/StructureDefinition/subscription-topic-basic` ([source](../src/Microsoft.Health.Fhir.R4.Core/Features/Subscriptions/StructureDefinition-subscription-topic-basic.json)). This is a server-specific extension, not a Backport IG requirement. The layout follows HAPI FHIR, but compatibility with every server is not guaranteed:
 
 | Topic element | Where it goes on `Basic` |
 |---------------|--------------------------|
@@ -101,7 +113,7 @@ On R4, topics are `Basic` resources described by the StructureDefinition `http:/
 | `status` | `modifierExtension`, URL `http://hl7.org/fhir/5.0/StructureDefinition/extension-SubscriptionTopic.status` |
 | `resourceTrigger`, `canFilterBy` | `extension`, URL `http://hl7.org/fhir/4.3/StructureDefinition/extension-SubscriptionTopic.<element>` |
 
-The server also reads topics written with the `5.0` URL for every element and `status` as a plain extension. The server ships it, lists it in `Basic.supportedProfile` in the CapabilityStatement when subscriptions are enabled, and resolves it for `$validate` without it being uploaded:
+The server also accepts topics with `5.0` URLs for every element and `status` as a plain extension. It ships the profile and lists it in `Basic.supportedProfile` when subscriptions are available. `$validate` resolves the profile without an upload:
 
 ```http
 POST /Basic/$validate?profile=http://fhir.microsoft.com/StructureDefinition/subscription-topic-basic
@@ -119,13 +131,14 @@ The server emits these instruments on the `FhirServer` meter:
 | `Subscriptions.Notifications` | counter | `type`, `outcome` (`success`, `failure`) | Handshake, heartbeat and event notification attempts |
 | `Subscriptions.NotificationDuration` | histogram (ms) | `type`, `outcome` | Duration of each attempt |
 | `Subscriptions.StatusChanges` | counter | `status` | Status changes made by the server |
-| `Subscriptions.LateTransactions` | counter | | Transactions that committed after the pump had passed them, so their changes did not notify. Should be zero; see [Event source](#event-source) |
+| `Subscriptions.LateTransactions` | counter | | Transactions that committed below a cursor already passed, so their changes did not notify. Should be zero; see [Event source](#event-source) |
 
 ## Authorization
 
 - Creating, updating or deleting a topic needs the `subscriptionTopic` data action, in addition to `write` or `delete`. `*` includes it. See [Roles](Roles.md).
 - Creating a subscription needs `write` on `Subscription` and read access to every resource type its topic triggers on.
 - Events are filtered against the subscription's grant: roles (re-checked against the current `roles.json`), SMART scopes including scope search parameters, and the patient compartment for patient-scoped tokens.
+- The grant cannot detect identity-provider revocation. Stop or delete the subscription to revoke it locally. The maximum lifetime forces periodic renewal unless that limit is disabled.
 - `$status` needs read access to the subscription.
 
 ## Try it locally

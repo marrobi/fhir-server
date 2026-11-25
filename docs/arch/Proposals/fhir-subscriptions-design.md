@@ -2,18 +2,18 @@
 
 Labels: [SQL](https://github.com/microsoft/fhir-server/labels/Area-SQL), New-Feature
 
-Status: Draft proposal. The decision is recorded in [ADR-2611: FHIR Topic-Based Subscriptions](../adr-2611-fhir-subscriptions.md) (Proposed). This document holds the detailed scope, design and delivery plan.
+Status: Draft proposal. [ADR-2611: FHIR Topic-Based Subscriptions](../adr-2611-fhir-subscriptions.md) records the proposed decision. This document gives the scope, design and release gate. The ADR and this proposal are reviewed before any feature code. The code PR adds the user guide and example requests.
 
 ## 1. Purpose and scope
 
-This proposal adds FHIR topic-based Subscriptions to the Microsoft FHIR Server. Clients will be able to register for server-pushed notifications when resources change. It covers:
+This proposal adds FHIR topic-based subscriptions to the Microsoft FHIR Server. Clients can request notifications when resources change. It covers:
 
 1. The subscription features the FHIR specification defines, and which ones we will implement ([section 3](#3-feature-support-matrix)).
 2. What we will explicitly **not** implement, and why ([section 4](#4-not-implementing)).
-3. How the features map onto the server's existing eventing architecture, and a phased delivery plan ([sections 5-8](#5-existing-eventing-architecture)).
+3. How the feature uses existing server components, the design, release gate and code placement ([sections 5-8](#5-existing-eventing-architecture)).
 4. The impact on the managed Azure Health Data Services events capability ([section 9](#9-impact-on-azure-health-data-services-events)).
 
-Normative references:
+FHIR specification references:
 
 - FHIR R5 [Topic-Based Subscriptions Framework](https://hl7.org/fhir/R5/subscriptions.html), [Subscription](https://hl7.org/fhir/R5/subscription.html), [SubscriptionTopic](https://hl7.org/fhir/R5/subscriptiontopic.html), [SubscriptionStatus](https://hl7.org/fhir/R5/subscriptionstatus.html)
 - [Subscriptions R5 Backport IG](https://hl7.org/fhir/uv/subscriptions-backport/) (for R4 and R4B)
@@ -25,9 +25,9 @@ The framework has three parts:
 
 | Component | Role |
 |---|---|
-| `SubscriptionTopic` | Defines **what** triggers a notification (a resource trigger or an event trigger), which **filters** clients may apply, and the notification **shape** (related resources to include). Always referenced by canonical URL. |
+| `SubscriptionTopic` | Defines what triggers a notification, which filters clients may apply, and which related resources to include. Subscriptions reference it by canonical URL. |
 | `Subscription` | A client's request for notifications on one topic. It sets the filters, the **channel** (rest-hook, websocket, email, message, or custom), the endpoint, and the **payload** (MIME type plus `empty` / `id-only` / `full-resource`). |
-| Notification `Bundle` | A `history` Bundle (`subscription-notification` in R5) whose first entry is the subscription status, followed by zero or more event payloads. |
+| Notification `Bundle` | A `history` Bundle on R4/R4B, or a `subscription-notification` Bundle on R5. The first entry gives the subscription status, followed by any event payloads. |
 
 How each FHIR version expresses these:
 
@@ -40,22 +40,22 @@ How each FHIR version expresses these:
 
 The managed Azure Health Data Services FHIR service runs R4 (4.0.x) and STU3, not R4B ([FAQ](https://learn.microsoft.com/azure/healthcare-apis/fhir/fhir-faq)). **R4 with the Backport IG is therefore the primary target**, and API-defined topics must work on R4.
 
-**Spec conformance minimum** (R5 §3.9.7; Backport IG conformance for R4B, which matches it):
+**Minimum required support** (R5 §3.9.7 and Backport IG conformance for R4B):
 
 - `Subscription`: read and write. Search is recommended.
 - The `$status` operation.
 - `SubscriptionTopic`: read and search.
 - At least one channel type (preferably a core one) and at least one payload type.
 
-On **R4**, the Backport IG does not require `SubscriptionTopic` read/search, because R4 has no such resource. It asks instead that servers SHOULD support topic discovery through the CapabilityStatement topic-canonical extension. The API-defined R4 topics in 3.2 go beyond the IG.
+On **R4**, the Backport IG does not require `SubscriptionTopic` read/search, because R4 has no such resource. It recommends topic discovery through the CapabilityStatement topic-canonical extension. The API-defined R4 topics in 3.2 are a server-specific extension.
 
-Delivery is **best-effort** unless a channel defines otherwise. Clients detect gaps through event numbering and heartbeats, and recover through `$status`, `$events`, or re-query.
+Delivery is **best-effort** unless a channel defines otherwise. Clients use event numbers and heartbeats to detect numbered gaps. In v1, `$status` reports status and counts; clients re-query resources to recover. `$events` replay is planned for later. Changes lost at the source may have no event number and cannot always be detected this way.
 
 ## 3. Feature support matrix
 
 Legend:
 
-- ✅ **v1**: in the first release (the phase is in brackets; see [section 7](#7-phased-delivery)).
+- ✅ **v1**: in the first release (see the [release gate](#7-v1-release-gate)).
 - ⏳ **Later**: planned after v1.
 - ❌ **No**: not planned (see [section 4](#4-not-implementing)).
 
@@ -63,9 +63,9 @@ Legend:
 
 | Feature | Spec | Support |
 |---|---|---|
-| R5 topic-based subscriptions | Core R5 | ✅ v1 [2-4] |
-| R4B topic-based (Backport IG) | Backport IG | ✅ v1 [2-4] |
-| R4 topic-based (Backport IG) | Backport IG | ✅ v1 [2-4] |
+| R5 topic-based subscriptions | Core R5 | ✅ v1 |
+| R4B topic-based (Backport IG) | Backport IG | ✅ v1 |
+| R4 topic-based (Backport IG) | Backport IG | ✅ v1 |
 | R4 classic criteria-based (`Subscription.criteria` = search URL) | Core R4 | ❌ No. Rejected at create; only Backport-profiled R4 subscriptions are accepted. |
 | STU3 subscriptions | Core STU3 | ❌ No |
 
@@ -73,17 +73,17 @@ Legend:
 
 | Feature | Spec | Support |
 |---|---|---|
-| Create, read, update, delete and search topics **through the API**, on all supported versions | SHALL read/search; write is MAY | ✅ v1 [2]. **Required.** Writes need the new `SubscriptionTopic` permission (3.7). Topics are rejected if any trigger or filter is unsupported. |
-| R4B/R5: native `SubscriptionTopic` resource | Core | ✅ v1 [2] |
-| R4: topic as a `Basic` resource with `Basic.code` = `http://hl7.org/fhir/fhir-types#SubscriptionTopic`, with the R5 topic elements carried as extensions (searchable as `Basic?code=http://hl7.org/fhir/fhir-types\|SubscriptionTopic`) | Not defined by the IG (server-specific). The IG records that HL7 tried a `Basic`-plus-extensions profile and dropped it for low usability. | ✅ v1 [2]. The ADR publishes a **versioned `StructureDefinition`** for this `Basic` profile (extension URLs and cardinalities), plus a worked create → search → subscribe example. The extension layout matches HAPI FHIR's R4 topics (topic metadata on `5.0` URLs with `status` as a modifier extension; `resourceTrigger` and `canFilterBy` on `4.3` URLs), and the earlier all-`5.0` layout is still read. Interoperability with other servers' R4 topic representations is a goal to be tested, not a v1 guarantee. |
+| Create, read, update, delete and search topics **through the API**, on all supported versions | SHALL read/search; write is MAY | ✅ v1. **Required.** Writes need the new `SubscriptionTopic` permission (3.7). Topics are rejected if any trigger or filter is unsupported. |
+| R4B/R5: native `SubscriptionTopic` resource | Core | ✅ v1 |
+| R4: topic as a `Basic` resource with `Basic.code` = `http://hl7.org/fhir/fhir-types#SubscriptionTopic`, with topic elements as extensions (searchable as `Basic?code=http://hl7.org/fhir/fhir-types\|SubscriptionTopic`) | Server-specific. The IG leaves R4 topic definitions out of scope and records that HL7 dropped an earlier `Basic` profile because it was difficult to use. | ✅ v1. The server ships a `StructureDefinition` for this profile (`http://fhir.microsoft.com/StructureDefinition/subscription-topic-basic`), lists it in `Basic.supportedProfile`, and resolves it for `$validate` without an upload. The extension layout follows HAPI FHIR: metadata uses `5.0` URLs, `status` is a modifier extension, and `resourceTrigger`/`canFilterBy` use `4.3` URLs. The earlier all-`5.0` layout is also accepted. This does not guarantee compatibility with every server. |
 | Topics pre-loaded from configuration or packages (for example, IG-defined topics) | Backport IG | ⏳ Later |
-| CapabilityStatement topic advertisement (`capabilitystatement-subscriptiontopic-canonical` extension) | MAY | ✅ v1 [2] |
-| `resourceTrigger.resource`, including multi-resource and `Resource` topics | Core | ✅ v1 [3] |
-| `resourceTrigger.supportedInteraction` create / update / delete | Core | ✅ v1 [3]. Delete means **soft delete** (see 4). |
-| `resourceTrigger.queryCriteria` (`current`, `previous`, `resultForCreate`, `resultForDelete`, `requireBoth`) | Core | ✅ v1 [3]. Limited to the filter subset in 3.4. |
-| `resourceTrigger.fhirPathCriteria` (`%current`, `%previous`) | Core | ✅ v1 [3] |
-| `canFilterBy` (`resource`, `filterParameter`, `comparator`, `modifier`) | Core | ✅ v1 [2-3] |
-| `notificationShape.include` / `revInclude` | Core | ⏳ Later [5] |
+| CapabilityStatement topic advertisement (`capabilitystatement-subscriptiontopic-canonical` extension) | MAY | ✅ v1 |
+| `resourceTrigger.resource`, including multi-resource and `Resource` topics | Core | ✅ v1 |
+| `resourceTrigger.supportedInteraction` create / update / delete | Core | ✅ v1. Delete means **soft delete** (see 4). |
+| `resourceTrigger.queryCriteria` (`current`, `previous`, `resultForCreate`, `resultForDelete`, `requireBoth`) | Core | ✅ v1. Limited to the filter subset in 3.4. |
+| `resourceTrigger.fhirPathCriteria` (`%current`, `%previous`) | Core | ✅ v1 |
+| `canFilterBy` (`resource`, `filterParameter`, `comparator`, `modifier`) | Core | ✅ v1 |
+| `notificationShape.include` / `revInclude` | Core | ⏳ Later |
 | `eventTrigger` (non-REST business events) | Core | ❌ No |
 | Topic versioning, `derivedFrom` resolution | Core | ⏳ Later |
 
@@ -91,18 +91,18 @@ Legend:
 
 | Feature | Spec | Support |
 |---|---|---|
-| Create, read, update, delete, search `Subscription` | SHALL read/write, SHOULD search | ✅ v1 [2] |
-| Validation at create or update (topic, filters, channel, endpoint, payload), returning `OperationOutcome` on rejection | SHOULD | ✅ v1 [2] |
-| `status` lifecycle: `requested` → `active` → `error` / `off`; `entered-in-error` | Core | ✅ v1 [4]. Only the server sets `active` or `error`. A client may set `requested` (to retry after an error) or `off`. See 3.6. |
-| `filterBy` (R5) / `backport-filter-criteria` extension (R4/R4B) | Core / IG | ✅ v1 [3]. Uses the subset in 3.4. |
-| `end` (auto-deactivate) | Core | ✅ v1 [4] |
-| `heartbeatPeriod` | Core | ✅ v1 [4]. Server enforces a minimum. |
-| `timeout` | Core | ✅ v1 [4]. Capped by server configuration. |
-| `maxCount` (multiple events per notification) | Core | ✅ v1 [4]. Capped by server configuration. |
-| `contentType` `application/fhir+json`, `application/fhir+xml` | Core | ✅ v1 [4] |
-| `content` / `backport-payload-content`: `empty`, `id-only`, `full-resource` | SHALL ≥1 | ✅ v1 [4]. **`id-only` is the default.** The Backport profile makes the content extension mandatory (1..1), so if a client omits it, the server adds `id-only` to the accepted resource. The spec allows the server to adjust a request; the client sees the accepted value in the response. `full-resource` can be restricted by policy (3.7). |
+| Create, read, update, delete, search `Subscription` | SHALL read/write, SHOULD search | ✅ v1 |
+| Validation at create or update (topic, filters, channel, endpoint, payload), returning `OperationOutcome` on rejection | SHOULD | ✅ v1 |
+| `status` lifecycle: `requested` → `active` → `error` / `off`; `entered-in-error` | Core | ✅ v1. Only the server sets `active` or `error`. Clients may request activation or retry with `requested`, or stop with `off` or `entered-in-error`. See 3.6. |
+| `filterBy` (R5) / `backport-filter-criteria` extension (R4/R4B) | Core / IG | ✅ v1. Uses the subset in 3.4. |
+| `end` (auto-deactivate) | Core | ✅ v1 |
+| `heartbeatPeriod` | Core | ✅ v1. Server enforces a minimum. |
+| `timeout` | Core | ✅ v1. Capped by server configuration. |
+| `maxCount` (multiple events per notification) | Core | ✅ v1. Capped by server configuration. |
+| `contentType` `application/fhir+json`, `application/fhir+xml` | Core | ✅ v1 |
+| `content` / `backport-payload-content`: `empty`, `id-only`, `full-resource` | SHALL ≥1 | ✅ v1. **`id-only` is the default.** The Backport profile requires the content extension (1..1). If it is missing, the server adds `id-only` and returns the accepted value. |
 | `fhirVersion` MIME parameter other than the server's version | SHALL NOT accept if unsupported | ❌ No. Rejected at create. |
-| `parameter` (R5) / `channel.header` (R4) as HTTP headers | Core | ✅ v1 [4]. Never logged. See 10 for redaction on read. |
+| `parameter` (R5) / `channel.header` (R4/R4B) as HTTP headers | Core | ✅ v1. Values are not logged. Redaction on read remains an open policy question (section 10). |
 | `managingEntity`, `contact`, `reason`, `name`, `identifier` | Core | ✅ Stored only; no behaviour. |
 
 ### 3.4 Filter and criteria evaluation
@@ -111,12 +111,12 @@ Filters and criteria are evaluated **in memory** against the changed resource (a
 
 | Feature | Support |
 |---|---|
-| Search parameter types: token, string, reference, date, number, quantity, uri | ✅ v1 [3] |
-| Comparators `eq`, `ne`, `gt`, `lt`, `ge`, `le`, `sa`, `eb`, `ap` (where valid for the type) | ✅ v1 [3] |
-| Modifiers `:missing`, `:exact`, `:contains`, `:not`, `:text` (token) | ✅ v1 [3] |
-| Custom search parameters (`SearchParameter` resources in the `Supported`/`Enabled` state) | ✅ v1 [3] |
+| Search parameter types: token, string, reference, date, number, quantity, uri | ✅ v1 |
+| Comparators `eq`, `ne`, `gt`, `lt`, `ge`, `le`, `sa`, `eb`, `ap` (where valid for the type) | ✅ v1 |
+| Modifiers `:missing`, `:exact`, `:contains`, `:not`, `:text` (token) | ✅ v1 |
+| Custom search parameters (`SearchParameter` resources in the `Supported`/`Enabled` state) | ✅ v1 |
 | Composite search parameters | ⏳ Later |
-| Chained parameters, reverse chaining (`_has`), `_include` in criteria | ❌ No. These need a database query per event, and are rejected at create. |
+| Chained parameters, reverse chaining (`_has`), `_include` in criteria | ❌ No. These need database queries and are rejected when written. |
 | `:above` / `:below` / `:in` / `:not-in` (terminology) | ❌ No. Rejected at create. |
 | `_text`, `_content`, `_filter`, `_query`, semantic search | ❌ No. Rejected at create. |
 
@@ -124,8 +124,8 @@ Filters and criteria are evaluated **in memory** against the changed resource (a
 
 | Channel | Spec | Support |
 |---|---|---|
-| `rest-hook` (HTTPS POST of the notification Bundle) | Core | ✅ v1 [4] |
-| Custom Azure channels: Event Grid, Service Bus, Storage (custom `channelType` codes, Managed Identity) | Allowed (custom codes) | ⏳ Later [5] |
+| `rest-hook` (HTTPS POST of the notification Bundle) | Core | ✅ v1 |
+| Custom Azure channels: Event Grid, Service Bus, Storage (custom `channelType` codes, Managed Identity) | Allowed (custom codes) | ⏳ Later |
 | `websocket` (+ `$get-ws-binding-token`) | Core | ❌ No |
 | `email` | Core | ❌ No |
 | `message` (FHIR Messaging Bundle) | Core | ❌ No |
@@ -134,30 +134,30 @@ Filters and criteria are evaluated **in memory** against the changed resource (a
 
 | Feature | Spec | Support |
 |---|---|---|
-| `event-notification` | Core | ✅ v1 [4] |
-| `handshake` on activation | **SHALL** for rest-hook (R5 and Backport) | ✅ v1 [4]. **Mandatory, not configurable.** A new or re-requested rest-hook subscription stays `requested` until a handshake is accepted (2xx), then becomes `active`. A failed initial handshake sets `error`. |
-| `heartbeat` | Core | ✅ v1 [4] |
-| `query-status` via `$status` (instance and type level) | **SHALL** | ✅ v1 [4] |
-| `query-event` via `$events` (replay past events) | MAY | ⏳ Later [5]. Limited to the server's retention window. |
-| `eventsSinceSubscriptionStart` / `notificationEvent.eventNumber` (gap detection) | Core | ✅ v1 [3-4]. Monotonic per subscription. Assigned only after the match-time authorization check (3.7), so unauthorized events leave no gap. `Unevaluable` events take a number, so clients detect them as gaps. |
-| `notificationEvent.focus` (absent for `empty`); for `id-only`, each entry carries `fullUrl` and `request`; for `full-resource`, each entry carries the resource, or `request`/`response` when it cannot be included | Core / Backport payloads | ✅ v1 [4]. Checked by profile validation in the release gate. |
-| `notificationEvent.additionalContext` | Core | ⏳ Later [5], with `notificationShape`. |
-| `SubscriptionStatus.error` reporting | Core | ✅ v1 [4] |
-| Error handling: bounded retries with back-off, then `error`; persistent failure, then `off`; client resets to `requested` | SHOULD | ✅ v1 [4]. Undelivered events are **retained** (within the retention window) while in `error`, so they can be delivered after recovery or, later, through `$events`. |
-| Ordered dispatch per subscription | Not required | ✅ v1 [4]. **One notification in flight per subscription.** Event *n+1* is not sent until event *n* succeeds or exhausts its retries. A failing endpoint blocks only its own subscription. |
-| Durable, retried delivery **attempts** with stable event numbers (a retry reuses the same `eventNumber`) | Best-effort required | ✅ v1 [4]. Receipt is **best-effort**, as the spec defines: an endpoint that stays down past the retry limit will not receive the event until it recovers. Duplicates are possible; clients deduplicate by `eventNumber`. |
+| `event-notification` | Core | ✅ v1 |
+| `handshake` on activation | **SHALL** for rest-hook (R5 and Backport) | ✅ v1. **Mandatory, not configurable.** A new or re-requested rest-hook subscription stays `requested` until a handshake is accepted (2xx), then becomes `active`. A failed initial handshake sets `error`. |
+| `heartbeat` | Core | ✅ v1 |
+| `query-status` via `$status` (instance and type level) | **SHALL** | ✅ v1 |
+| `query-event` via `$events` (replay past events) | MAY | ⏳ Later. Limited to the server's retention window. |
+| `eventsSinceSubscriptionStart` / `notificationEvent.eventNumber` (gap detection) | Core | ✅ v1. Numbers increase per subscription and are assigned after authorization (3.7). Recorded `Unevaluable` events take a number but are not sent. Missing source rows and changes that cannot be authorized leave no numbered gap (decision 3). |
+| `notificationEvent.focus` (absent for `empty`); for `id-only`, each entry carries `fullUrl` and `request`; for `full-resource`, each entry carries the resource, or `request`/`response` when it cannot be included | Core / Backport payloads | ✅ v1. Checked by profile validation in the release gate. |
+| `notificationEvent.additionalContext` | Core | ⏳ Later, with `notificationShape`. |
+| `SubscriptionStatus.error` reporting | Core | ✅ v1 |
+| Error handling: bounded retries with back-off, then `error`; persistent failure, then `off`; client resets to `requested` | SHOULD | ✅ v1. Pending events stay in storage while in `error`; `EventRetentionDays` does not remove them. A client can request a new handshake to retry. After `MaxErrorHours` (default 72), the server sets `off` and discards pending events. `0` disables this limit. |
+| Ordered dispatch per subscription | Not required | ✅ v1. **One notification at a time per subscription.** After retries are exhausted, delivery pauses in `error`. Later events cannot pass the failed event. A failing endpoint blocks only its own subscription. |
+| Stored, retried delivery attempts with stable event numbers | Best-effort required | ✅ v1. A retry reuses the same `eventNumber`. Receipt is not guaranteed. Clients remove duplicates by event number. |
 | Guaranteed (reliable) channel semantics | Optional | ❌ No |
 
 ### 3.7 Security
 
 | Feature | Spec | Support |
 |---|---|---|
-| **Create-time authorization.** On create or update, the subscriber's identity, roles and SMART scopes/compartment are captured as an **authorization snapshot**. The topic and filters must fall within that snapshot (for example, a patient-scoped caller must filter to their own compartment). | SHALL enforce policy | ✅ v1 [2] |
-| **Authorization for every event, at every content level** (`empty`, `id-only`, `full-resource`), including retries and status counts. Each event is checked against the stored snapshot **at matching, before an event number is assigned**, so events outside it are never numbered or sent and leave no gap that would reveal them (R5 §3.9.8). The check runs again at delivery to catch revocation; a gap caused by revocation is acceptable. | SHOULD ensure authorization is still in place | ✅ v1 [4]. The server cannot re-validate a token or detect identity-provider revocation without a live request, so the check is against the snapshot, not live authorization. **Revocation** works by: (a) the subscriber or an admin setting `off` or deleting the subscription; (b) a configurable maximum subscription lifetime (enforced by `end`), which forces periodic re-subscription and therefore a fresh snapshot; (c) re-evaluating local role assignments (server RBAC configuration) at delivery time. |
-| New `DataActions.SubscriptionTopic` permission. It is required whenever **either the existing or the new** resource is a topic (the R4B/R5 `SubscriptionTopic`, or an R4 `Basic` with the topic code), covering create, update, delete and conditional variants. Reading and searching topics needs only `Read`. | Server policy | ✅ v1 [2]. Mirrors the existing `DataActions.SearchParameter` pattern. `DataActions.All` must be extended to include it. |
-| **Registry-time revalidation.** `$import` and bulk update bypass the MediatR validation pipeline, so the registry validates every `Subscription` and topic again (topic, filters, channel, endpoint policy, authorization snapshot) before activating it. Invalid resources are never activated; the server sets the subscription to `error` with a reason. Valid content is not enough: activation also requires a server-owned grant bound to the subscription version and endpoint (design decision 8), so imported subscriptions are not activated until an authorized caller activates them. The stored status reflects this (`off`, or `error` with a reason in `SubscriptionStatus.error`), so reads and `$status` never report `active` for a subscription that is not delivering. | Server policy | ✅ v1 [2]. Prevents server-side request forgery (SSRF) and unauthorized data disclosure through imported subscriptions. |
-| HTTPS-only endpoints, a configurable endpoint allow-list, and blocking of private and link-local addresses | Recommended | ✅ v1 [2] |
-| Restricting `full-resource` per client or role | MAY | ✅ v1 [4] (configuration) |
+| **Authorization on API writes.** On create or update, the server records the caller's identity, roles, SMART scopes and compartment in an authorization grant. The caller needs read access to each topic resource type. Per-event checks also enforce resource-level restrictions, including the patient compartment. | SHALL enforce policy | ✅ v1 |
+| **Authorization for every event and content level**, including retries and status counts. The server checks the stored grant before assigning an event number. Changes outside the grant are not numbered or sent (R5 §3.9.8). Delivery checks again for local revocation; this later denial may leave a gap. | SHOULD ensure authorization is still in place | ✅ v1. The grant cannot detect identity-provider revocation. Local controls are stopping or deleting the subscription, limiting its lifetime through `end`, and checking current server roles. Renewal through the API captures a fresh grant. |
+| New `DataActions.SubscriptionTopic` permission. It is required whenever **either the existing or the new** resource is a topic (the R4B/R5 `SubscriptionTopic`, or an R4 `Basic` with the topic code), covering create, update, delete and conditional variants. Reading and searching topics needs only `Read`. | Server policy | ✅ v1. Mirrors the existing `DataActions.SearchParameter` pattern. `DataActions.All` must be extended to include it. |
+| **Validation when loading stored resources.** `$import` and bulk update bypass API validation. The registry therefore validates topics and subscriptions again before use. Activation needs valid content and a server-owned grant bound to the accepted content and endpoint (decision 8). Missing or invalid grants prevent handshakes and notifications. The server corrects status to `off` or `error` and reports the reason through `$status`. Stored status may be stale until background validation runs. | Server policy | ✅ v1. Blocks imported subscriptions from bypassing endpoint checks or authorization. |
+| HTTPS-only endpoints, a configurable endpoint allow-list, and blocking of private and link-local addresses | Recommended | ✅ v1 |
+| Restricting `full-resource` per client or role beyond the normal event authorization checks | MAY | ⏳ Later. No setting implements this policy in v1. |
 | Tracking sent notifications as `AuditEvent`/`Communication` resources | Encouraged | ❌ No. Uses the server's existing audit logging and telemetry instead. |
 
 ### 3.8 Change sources that trigger notifications
@@ -166,7 +166,7 @@ Filters and criteria are evaluated **in memory** against the changed resource (a
 |---|---|
 | REST create, update, patch, soft delete, and conditional variants | ✅ v1 |
 | Batch and transaction bundles (only committed entries notify) | ✅ v1 |
-| `$import`, bulk update, bulk (soft) delete | ✅ v1. They can produce high volume, and long-running batches delay all notifications (see 5 and 10). `Subscription`/topic resources written this way are subject to registry-time revalidation (3.7). |
+| `$import`, bulk update, bulk (soft) delete | ✅ v1. Long batches delay all notifications. Imported historical versions notify only with `NotifyHistoricalVersions=true` and the `Transactions` source. Stored topics and subscriptions are validated again before use (3.7). Source and history limits are in section 6. |
 | Server-originated `Subscription` bookkeeping (status, error and event-count updates) | ❌ No. Excluded from matching to prevent notification loops. |
 | Hard delete (`_hardDelete`), `$purge-history` | ❌ No |
 | Cosmos DB data store | ❌ No |
@@ -180,7 +180,7 @@ Filters and criteria are evaluated **in memory** against the changed resource (a
 | **websocket, email, message channels**, `$get-ws-binding-token` | Each needs new connection-management or infrastructure (persistent sockets across instances, SMTP, messaging endpoints) with limited demand. rest-hook plus Azure-native channels cover the integration scenarios. Can be revisited as separate proposals. |
 | **Guaranteed or exactly-once delivery** | The spec defines best-effort delivery. We provide durable, retried attempts with stable event numbers, ordered dispatch and gap detection. |
 | **Cross-version notifications** (`fhirVersion` MIME parameter ≠ server version) | Each server instance runs one FHIR version. Requests are rejected at create, as the spec requires. |
-| **Database-evaluated criteria** (chained, `_has`, terminology modifiers, `_filter`, full-text, semantic) | A query per event per subscription doesn't scale. They are rejected at create time, not silently ignored. |
+| **Database-evaluated criteria** (chained, `_has`, terminology modifiers, `_filter`, full-text, semantic) | Avoids a database query per event per subscription. Unsupported criteria are rejected when written, not silently ignored. |
 | **R4 topics in a non-`Basic` form** (for example, an R4B-shaped `/SubscriptionTopic` endpoint on an R4 server) | `Basic` keeps R4 topics as valid R4 resources that work with the existing REST, search, history and authorization, without a non-standard endpoint. |
 | **Hard delete and `$purge-history` notifications** | Data is physically removed, and the current schema doesn't expose those keys to the event source. This matches the Azure Health Data Services events contract (section 9). |
 | **Cosmos DB** | No ordered transaction log equivalent exists. It would need a separate change-feed design. |
@@ -190,28 +190,28 @@ Filters and criteria are evaluated **in memory** against the changed resource (a
 
 ## 5. Existing eventing architecture
 
-No subscription feature exists on `main`. These building blocks exist:
+The design builds on the following server components. New subscription components are described in section 6.
 
 | Building block | Location | Relevance |
 |---|---|---|
-| **Transactions table + visibility watermark** (SQL) | `Features/Schema/Sql/Tables/Transactions.sql`; sprocs `MergeResourcesBeginTransaction`, `MergeResourcesCommitTransaction`, `MergeResourcesAdvanceTransactionVisibility`, `MergeResourcesGetTransactionVisibility`, `GetTransactions`, `GetResourcesByTransactionId` | Every SQL write through `SqlServerFhirDataStore.MergeInternalAsync` opens a transaction row, and every `Resource` row records its `TransactionId`. `TransactionWatchdog` advances a gapless **visibility watermark** up to (not past) the oldest incomplete transaction, and rolls forward timed-out transactions. Transaction IDs are allocated when a transaction begins, so this order is consistent but not strictly commit order. This is a durable, ordered outbox. |
+| **Transactions table + visibility watermark** (SQL) | `Features/Schema/Sql/Tables/Transactions.sql`; stored procedures `MergeResourcesBeginTransaction`, `MergeResourcesCommitTransaction`, `MergeResourcesAdvanceTransactionVisibility`, `MergeResourcesGetTransactionVisibility`, `GetTransactions`, `GetResourcesByTransactionId` | SQL writes through `SqlServerFhirDataStore.MergeInternalAsync` open a transaction row. Each `Resource` row records its `TransactionId`. `TransactionWatchdog` advances visibility only when earlier transactions have completed and completes timed-out transactions. IDs are assigned at transaction start, not commit. Clock changes and missing history limit event coverage (section 6). |
 | **EventsReader POC** | `tools/EventsReader/Program.cs` | Demonstrates the polling shape: poll the watermark, call `GetTransactions(last, current)`, read keys per transaction, and persist a cursor in `dbo.Parameters`. **It is not a correct reader to copy.** `GetTransactions` returns at most 10,000 rows, but the POC checkpoints the *visibility watermark* rather than the last transaction it processed, so a backlog over one page is skipped. It also has no crash-consistency between processing and checkpointing. |
-| **Resource change capture** (SQL) | `ResourceChangeData` table, `CaptureResourceIdsForChanges`, `FetchResourceChanges_3`, `SqlServerFhirResourceChangeDataStore : IChangeFeedSource<ResourceChangeData>` | Controlled by `CoreFeatureConfiguration.SupportsResourceChangeCapture` (default `false`). It records create, update, and soft delete from `MergeResources`; hard delete is not recorded. No consumer exists in this repository. It is presumed to feed Azure Health Data Services events (section 9). |
+| **Resource change capture** (SQL) | `ResourceChangeData` table, `CaptureResourceIdsForChanges`, `FetchResourceChanges_3`, `SqlServerFhirResourceChangeDataStore : IChangeFeedSource<ResourceChangeData>` | Controlled by `CoreFeatureConfiguration.SupportsResourceChangeCapture` (default `false`). It records create, update and soft delete from `MergeResources`, but not hard delete. The new subscription source can read it. The managed events publisher is not in this repository and is presumed to use this feed (section 9). |
 | **MediatR request pipeline** | `Shared.Core/Features/Resources/*` handlers, `IPipelineBehavior<>` (for example `CreateOrUpdateSearchParameterBehavior`) | The place to **validate** `Subscription` and `SubscriptionTopic` writes. Not suitable for emitting events: it runs before commit and is bypassed by import and bulk jobs. |
-| **Durable job queue** | `Microsoft.Health.TaskManagement` (`JobHosting`, `IJobFactory`, `IQueueClient`), `JobType`/`QueueType` | An orchestrator/processing job pattern with retries and heartbeats. `tools/AsyncJobGenerator` scaffolds new job types. |
-| **Watchdogs** | `SqlServer/Features/Watchdogs` (`Watchdog<T>`, `WatchdogLease`) | A leased singleton loop across instances. |
-| **Search stack** | `ISearchIndexer`, `ISearchOptionsFactory`, `Features/Search/Expressions`, `IFhirPathProvider` | Parses criteria and indexes a resource in memory. No in-memory expression evaluator exists on `main`. |
+| **Stored job queue** | `Microsoft.Health.TaskManagement` (`JobHosting`, `IJobFactory`, `IQueueClient`), `JobType`/`QueueType` | Supports background jobs with retries and heartbeats. Earlier subscription prototypes used it; this design uses a watchdog and delivery service instead. |
+| **Watchdogs** | `SqlServer/Features/Watchdogs` (`Watchdog<T>`, `WatchdogLease`) | A lease allows one instance at a time to run periodic work. |
+| **Search stack** | `ISearchIndexer`, `ISearchOptionsFactory`, `Features/Search/Expressions`, `IFhirPathProvider` | Parses criteria and indexes a resource in memory. The subscription feature adds an evaluator that reuses these components. |
 | **Cross-instance cache sync** | ADR `adr-2603-load-independent-search-param-cache-sync.md` | A pattern for a shared active-subscription registry. |
 
 **Gaps:**
 
 - **Hard delete and `$purge-history`** use `HardDeleteResource.sql`. They open a `Transactions` row only when change capture is on, and even then they tag rows with `HistoryTransactionId`, so `GetResourcesByTransactionId` does not return them.
 - **Cosmos DB** has no ordered transaction log.
-- **Historical rows.** `GetResourcesByTransactionIdAsync` (the resource-returning overload) uses `@IncludeHistory = 0`. If a resource is updated again before matching reaches the earlier transaction, that earlier version is already history and is silently dropped, losing an event. The earlier prototype had this defect.
+- **Historical rows.** Reading only `@IncludeHistory = 0` loses versions updated again before matching. The earlier prototype had this defect. The new source includes historical rows that still exist.
 - **Previous version.** `queryCriteria.previous` and `%previous` need the prior version. `InvisibleHistoryCleanupWatchdog` may remove it.
-- **Head-of-line latency.** `MergeResourcesAdvanceTransactionVisibility` stops at the oldest *incomplete* transaction. A long `$import` batch, or a stalled transaction until `TransactionWatchdog` times it out (6 × heartbeat period), delays notifications for **every** subscription on the server. This is the price of a gapless, ordered event stream.
+- **Delays from incomplete transactions.** `MergeResourcesAdvanceTransactionVisibility` stops at the oldest incomplete transaction. A long `$import` batch, or a stalled transaction until `TransactionWatchdog` times it out (6 × heartbeat period), delays every subscription.
 
-**Prior art:** closed PRs #4474, #4628 and #5478 prototyped a `Microsoft.Health.Fhir.Subscriptions` project. They used a watchdog over `Transactions`, an orchestrator job that matched in memory, per-subscription processing jobs, rest-hook/Storage/Event Grid channels, and an R4 Backport converter. This proposal reuses that shape. It batches transactions per job rather than creating one job per transaction, and it defines the scope above explicitly. See [section 11](#11-lessons-from-prior-attempts-and-delivery-guardrails) for why those PRs did not merge.
+**Prior work:** closed PRs #4474, #4628 and #5478 used a transaction watchdog, matching and delivery jobs, several channels, and an R4 Backport converter. This design reuses the pump and converter approach, but matches in the pump and delivers through a background service, not queued jobs. Section 11 records the known outcomes and inferred causes.
 
 ## 6. Implementation design
 
@@ -223,17 +223,17 @@ flowchart TB
     TXW["TransactionWatchdog"] -->|"advance visibility"| TX
   end
 
-  subgraph S2["Event pump + matching (new, leased singleton)"]
+  subgraph S2["Event pump and matching (one leased worker)"]
     EP["SubscriptionEventWatchdog"] -->|"page GetTransactions(cursor, visibility)"| TX
     EP -->|"read exact versions<br/>(IncludeHistory = 1)"| TX
     EP --> REG["ActiveSubscriptionRegistry<br/>(revalidated, activation watermark)"]
     EP --> EV["In-memory matcher<br/>search + FHIRPath"]
-    EP --> AM{"Authorize vs snapshot<br/>(before numbering)"}
+    EP --> AM{"Check authorization grant<br/>(before numbering)"}
     EP -->|"one SQL transaction:<br/>events + cursor"| OB[("dbo.SubscriptionEvents<br/>+ Parameters: Subscriptions.Cursor")]
   end
 
-  subgraph S3["Delivery (job queue, single-flight per subscription)"]
-    OB --> DJ["SubscriptionDeliveryJob<br/>lease per subscription"]
+  subgraph S3["Background delivery (one send per subscription)"]
+    OB --> DJ["SubscriptionDeliveryService<br/>lease in SubscriptionStates"]
     DJ --> AZ{"Re-check authorization<br/>(revocation)"}
     AZ --> CH{"ISubscriptionChannel"}
     CH --> RH["rest-hook (v1)"]
@@ -244,7 +244,7 @@ flowchart TB
 
 ### Event source options
 
-Two existing sources can feed the matcher. Both are read-only uses of existing data, and both sit behind `ITransactionEventSource`, so the matcher and delivery are the same either way. Underneath, the deduplication key and activation watermark in the design decisions below are written for `Transactions`; the change-feed source maps each record back to the transaction that wrote it so the same key and watermark apply. The source is fixed per database (section 12).
+Two sources implement `ITransactionEventSource`. Both read existing data without changing it. The change-feed source maps each record to its writing transaction, so both sources use the same event uniqueness key and activation watermark. Each source has its own cursor. The source is fixed on first use of a database (section 12).
 
 | | `Transactions` (preferred) | `ResourceChangeData` change feed (alternative) |
 |---|---|---|
@@ -253,64 +253,62 @@ Two existing sources can feed the matcher. Both are read-only uses of existing d
 | Ordering for readers | Visibility watermark (consistent order; IDs are allocated at transaction begin, so not strictly commit order); no new locks on writes | Identity order; the existing reader holds a `TABLOCK, HOLDLOCK` that can block concurrent writes (impact not measured) |
 | Retention | Can be held back by the subscription cursor | Not managed in this repository; presumed owned by the managed events pipeline (unverified). A lagging reader could lose events |
 | Coverage | Create, update, soft delete, `$import`, bulk, including historical versions loaded by `$import` | Same, except historical versions (only `IsHistory = 0` rows are captured) |
-| Main drawback | Head-of-line latency during long transactions | Lock contention and coupling to the managed events configuration |
+| Main drawback | Long transactions delay every subscription | Table locks and dependence on managed events configuration |
 
-The choice between the two is open for product group guidance, and is recorded in ADR-2611 before it is accepted. Two related product questions should be answered with it: should historical versions loaded by `$import` produce notifications, and is change capture (with its retention) a supported dependency for this feature? The implementation makes each of these a setting (section 12).
+The product group must confirm the default source before accepting ADR-2611. It must also decide whether imported history should notify and whether change capture and its retention are supported dependencies. Settings control the source and imported-history behaviour, but do not by themselves establish a retention guarantee.
 
-### Design decisions (to be settled in an ADR)
+### Proposed design decisions
 
 1. **Event source is `Transactions`** (preferred; see the options above). It is always on, consistently ordered, and covers import and bulk operations. `ResourceChangeData` is not modified (section 9); it remains the documented alternative.
-2. **Cursor semantics (no loss, no double-numbering).**
-   - The cursor is the **last transaction ID whose matching results are durably committed**, never the visibility watermark. The pump pages through `GetTransactions` until it reaches the watermark, so backlogs larger than 10,000 transactions are fully processed.
+2. **Cursor and replay.**
+   - The cursor records the last source position whose matching results were committed. It is not advanced to an unread visibility watermark. The pump reads successive pages, including backlogs larger than 10,000 transactions.
    - Matching output (`SubscriptionEvents` rows) and the cursor advance are written in **one SQL transaction**. A crash before commit replays the batch; a crash after commit does not.
    - `SubscriptionEvents` has a unique key on `(SubscriptionId, TransactionId, ResourceTypeId, ResourceSurrogateId)`, so a replayed batch cannot create duplicate events or consume extra event numbers. This guarantees one **logical** event per match; it does not prevent the same notification being delivered more than once (decision 7).
    - Required tests: a backlog of more than 10,000 transactions, and a process kill between matching and commit.
-3. **Version-exact matching.** The matcher reads each transaction with `@IncludeHistory = 1` and evaluates **the exact version written by that transaction**, even if it is already historical. The previous version for `queryCriteria.previous` / `%previous` is the immediately preceding version by `(type, id, version - 1)`. If either version is unavailable (for example, removed by history cleanup), the event is **not silently dropped**: it is recorded with `Status = Unevaluable` and surfaced through `SubscriptionStatus.error` and metrics. `Unevaluable` events are created only for subscriptions whose topic covers that resource type and interaction and whose authorization snapshot covers that resource type. They take an event number but are not delivered, so the client sees a gap and recovers (R5 §3.9.10.2). `InvisibleHistoryCleanupWatchdog` must not remove history newer than the subscription cursor.
-   - **History configuration limit.** The cleanup gate protects only history the server keeps. When `KeepHistory` is false for a write (a resource type with `no-version` versioning, or a metadata-only update with meta history disabled), `MergeResources` replaces the previous row's body with an "invisible" marker when change capture is on, or **deletes the row in the same write** when it is off. In the first case the event can be recorded as `Unevaluable`; in the second the earlier version leaves no trace and would be lost silently. The product group decides between requiring history for resource types used by subscriptions, or documenting a weaker guarantee for those types. Required test: two rapid updates to a resource type with history disabled, with change capture both on and off.
-4. **Activation watermark.** When a subscription becomes `active` (after handshake), the server records the current visibility watermark as its `ActivationTransactionId`. It matches only transactions **after** that point, so a new subscription never receives earlier changes. Topic updates and subscription `off`/delete take effect for transactions after the change is visible; batches already matched keep their results.
+3. **Exact versions and history limits.** The `Transactions` source reads every version a page of transactions wrote, including history, in one `GetResourcesByTransactionIdRange` call, and matches the exact version when available. `previous` criteria use the immediately preceding version. If a change record remains but a required version is missing, the pump can record `Unevaluable`. The topic must cover that change, and the grant must allow reading the resource type without compartment or search-parameter scope restrictions. Restricted subscribers get no numbered gap because it could reveal a change they cannot read. A recorded `Unevaluable` event takes a number but is not delivered; `$status` and metrics report the failure.
+   - When history is disabled, a later write can replace the earlier body with an invisible marker or delete the row. A marker can produce `Unevaluable`; a deleted change row cannot be reported. A numbered gap is therefore not guaranteed.
+   - `UnversionedResourceTypes=AllowWithGaps` permits topics on `no-version` types with these limits. `RequireHistory` rejects such topics, including base-type triggers while any covered type is `no-version`. It does not prevent all missing-history cases.
+   - While enabled, the feature keeps invisible history for at least `MaxHistoryCleanupHoldHours` (default 24). Cleanup does not wait for the pump cursor. A longer backlog can lose required versions or change rows.
+   - Imported historical versions notify only with `NotifyHistoricalVersions=true`. The change feed does not record them.
+   - Required test: rapid updates with history disabled, with change capture both on and off.
+4. **Activation and ordering.** After a successful handshake, the server records `ActivationTransactionId`. Matching uses that watermark with the `TransactionReadLagSeconds` margin (default 5), so changes shortly before activation may notify.
+   - Transaction IDs use the SQL Server clock. A backward clock step can place a later transaction below the saved cursor. The `Transactions` source delays reads by the configured margin to reduce this risk.
+   - A transaction that commits below a cursor already passed is counted in `Subscriptions.LateTransactions` and logged, but not notified. An ordinary long transaction delays visibility; exceeding the read delay alone does not make it late.
+   - On first run, the pump starts at visibility, or the earliest existing activation watermark if lower.
 5. **In-memory matching** through a new evaluator in `Core/Features/Search/InMemory`, reusing `ISearchIndexer`/`ISearchOptionsFactory` and `IFhirPathProvider`. Unsupported criteria are rejected when the subscription or topic is written (3.4).
-6. **Durable per-subscription outbox.** A new `dbo.SubscriptionEvents` table stores `(SubscriptionId, EventNumber, TransactionId, ResourceTypeId, ResourceSurrogateId, ResourceVersion, Interaction, Status, Attempts, NextAttemptDate)`. It provides stable event numbers, retries with back-off, retention for later replay, and isolation between endpoints.
-7. **Single-flight delivery.** At most one notification is in flight per subscription, which preserves `eventNumber` order. A delivery lease per subscription prevents two workers sending concurrently.
-8. **Registry with revalidation.** Active subscriptions and topics are cached per instance. The cache refreshes when a `Subscription` or topic change is seen, and periodically through the cache-sync pattern. Every resource is revalidated on load (3.7), because `$import` and bulk paths bypass write-time validation. Revalidation checks content, not who authorized it: a subscription is activated only when it has a server-owned **activation grant** (the authorization snapshot) bound to its current version and endpoint. Subscriptions written or changed without one, including through `$import` or bulk operations, are not activated (no handshake, no notifications) until an authorized caller activates them through the API. The server sets their status to `off`, or `error` with a reason, so the stored status never claims `active`.
+6. **Stored events and state.** `dbo.SubscriptionEvents` stores event numbers, resource versions, interactions, delivery status and retry details. `dbo.SubscriptionStates` stores grants, accepted content hashes, activation watermarks, event counters, errors and delivery leases. Delivered and other completed event records expire after `EventRetentionDays`. Pending events do not expire under that setting.
+7. **One send at a time.** A hosted background service delivers notifications, not a `TaskManagement` job. A per-subscription lease prevents concurrent sends and is renewed before each send for longer than its timeout. Retry exhaustion sets `error` and pauses delivery. After `MaxErrorHours` (default 72), the server sets `off` and retires pending events; `0` disables the limit.
+8. **Registry and grants.** Each instance caches subscriptions and topics and refreshes the cache after changes and on a timer. It validates stored content again before use. Activation requires a server-owned authorization grant bound to the accepted content hash and endpoint, not merely a stored `active` status.
+   - Changed content needs a new grant and handshake. Old pending events are retired so they cannot reach a new endpoint or use new filters.
+   - `off`, `entered-in-error`, deletion and expiry revoke the grant. Writes outside the API cannot create a new grant.
+   - Without a valid grant, no handshake or notification is sent. The server corrects stored status to `off` or `error` during background validation; raw resource reads may show stale status until then.
+   - Each activation increments a counter. If activation changes while the pump matches a page, the page is matched again rather than committed with missing subscriptions.
 9. **Loop prevention.** Writes the subscription engine makes to `Subscription` resources (status, error, event counts) are tagged and excluded from matching.
 10. **Canonical internal model.** An R5-shaped internal model is used for all versions, with converters for R4 Backport, R4B and R5, following the Backport IG recommendation to use R5 definitions internally. On R4, `SubscriptionTopic` is converted to and from `Basic` (topic code plus extensions).
-11. **Opt-in.** `Subscriptions:Enabled` defaults to `false` and is independent of `SupportsResourceChangeCapture`. SQL Server only.
+11. **Opt-in.** `FhirServer:Subscriptions:Enabled` defaults to `false` and is independent of `SupportsResourceChangeCapture`. The feature needs SQL Server schema 123 or later. Subscription and topic API writes need validation and grant handling; matching and delivery add no synchronous step to other resource writes.
 
-## 7. Phased delivery
+## 7. v1 release gate
 
-| Phase | Scope | Key work items |
-|---|---|---|
-| **0. ADR and spike** | Decisions in 6 | Agree ADR-2611, including the event source choice (product group guidance). Benchmark version-exact resource reads at CI-sized data, measure head-of-line latency during a long `$import` and set a latency target, confirm the history-cleanup gate, and publish the R4 `Basic` topic `StructureDefinition`. |
-| **1. Event pump** | SQL, feature flag | `SubscriptionsConfiguration`; `SubscriptionEvents` schema migration (backward compatible); `SubscriptionEventWatchdog` with paged reads and the atomic events + cursor commit (design decision 2); `ITransactionEventSource` (Core) with a SQL implementation reading `@IncludeHistory = 1`; backlog and crash tests. No changes to `ResourceChangeData`. |
-| **2. Resources, validation, registry** | Write side | Version converters (including R4 `Basic` ↔ topic); `Subscription`/topic validation behaviours; `DataActions.SubscriptionTopic` (old-or-new rule); authorization snapshot capture; endpoint security policy; registry with revalidation and activation watermark; CapabilityStatement entries (`instantiates`, `supportedProfile`, topic canonicals). |
-| **3. Matching** | Core | In-memory evaluator (3.4); `queryCriteria`/`fhirPathCriteria` with previous/current; `Unevaluable` handling; loop prevention. |
-| **4. rest-hook delivery and v1 release gate** | Core + Api | Notification Bundle builder (all three content levels, JSON/XML, per FHIR version); `RestHookChannel`; mandatory handshake; heartbeat; status lifecycle; `end`; `$status`; single-flight delivery; delivery-time authorization; metrics and logging; `SubscriptionEvents` retention watchdog; `docs/Subscriptions.md` and `docs/rest/Subscriptions.http`. **v1 ships only when the release gate below passes.** |
-| **5. Post-v1** | Api | `$events`; `notificationShape` and `additionalContext`; Azure channels (Event Grid, Service Bus, Storage); topics pre-loaded from packages. |
+v1 ships only when all of these pass:
 
-**First milestone (end of phase 4, before any post-v1 work):** a single R4 Backport flow, end to end:
-
-1. Create an API-defined topic (R4 `Basic`) with `DataActions.SubscriptionTopic`.
-2. Create an `id-only` rest-hook subscription, and confirm the server adds the content extension.
-3. Complete the mandatory handshake: `requested` → `active`.
-4. Deliver one authorized event.
-5. Repeat with the worker killed mid-batch (no loss, no duplicate event numbers), and with authorization revoked between matching and delivery (event not sent).
-
-**v1 release gate:**
-
+- ADR-2611 is accepted, including the product group decisions on its open defaults.
+- Measurements on representative data record pump throughput, added database load, and notification delays during a long `$import`. A latency target is set from these results.
+- An R4 Backport flow works end to end: create an API-defined topic (R4 `Basic`) with `DataActions.SubscriptionTopic`; create an `id-only` rest-hook subscription and confirm the server adds the content extension; complete the handshake (`requested` → `active`); deliver one authorized event. Repeat with the worker stopped mid-batch (readable changes replay without duplicate event numbers), and with authorization revoked between matching and delivery (event not sent).
 - E2E tests against a local webhook receiver for R4 Backport, R4B and R5 payloads (`Parameters` vs `SubscriptionStatus` as the first entry), validated against the Backport and R5 profiles, for every content level (`empty` has no focus; `id-only` entries carry `fullUrl` and `request`).
 - Handshake transitions: success → `active`; failure → `error`.
 - Backlog over 10,000 transactions and crash-replay tests pass.
-- Load test (`tools/PerfTester`) results, including head-of-line latency during `$import`, meet the phase 0 target.
+- Load test (`tools/PerfTester`) results, including notification delays during `$import`, meet the latency target.
 - Regression tests with `Subscriptions:Enabled=false`, and with both subscriptions and `SupportsResourceChangeCapture` enabled, show no change to existing behaviour.
+- A user guide (`docs/Subscriptions.md`) documents settings, defaults, metrics, the R4 topic profile and limits. Example requests (`docs/rest/Subscriptions.http`) and a local sample are included.
 
 ## 8. Code placement
 
 | Component | Project |
 |---|---|
-| Configuration, `ISubscriptionChannel`, `ITransactionEventSource`, in-memory evaluator, registry, delivery job, authorization snapshot | `Microsoft.Health.Fhir.Core` (or a new `Microsoft.Health.Fhir.Subscriptions` project) |
+| Configuration, `ISubscriptionChannel`, `ITransactionEventSource`, in-memory evaluator, registry, delivery service, authorization grant and subscription validation | `Microsoft.Health.Fhir.Core` |
 | Version converters, notification Bundle builder | `Microsoft.Health.Fhir.Shared.Core` |
-| Validation behaviours, `$status`/`$events` endpoints, registration | `Microsoft.Health.Fhir.Shared.Api` |
-| Event pump and matching watchdog, SQL event source, `SubscriptionEvents` table and sprocs | `Microsoft.Health.Fhir.SqlServer` |
+| `$status` endpoint and API registration (`$events` later) | `Microsoft.Health.Fhir.Shared.Api` |
+| Event watchdog, SQL event sources, `SubscriptionEvents` and `SubscriptionStates` tables, stored procedures | `Microsoft.Health.Fhir.SqlServer` |
 
 ## 9. Impact on Azure Health Data Services events
 
@@ -318,40 +316,40 @@ The choice between the two is open for product group guidance, and is recorded i
 
 | Aspect | Azure Health Data Services events | This proposal |
 |---|---|---|
-| Purpose | Platform/integration events: every change, coarse-grained | FHIR-standard, client-managed subscriptions with server-side filtering |
+| Purpose | Azure integration events for supported resource changes | FHIR-standard, client-managed subscriptions with server-side filtering |
 | Configured by | Azure control plane (Event Grid subscription, ARM/RBAC) | FHIR API (`POST Subscription`), FHIR authorization and SMART scopes |
 | Filtering | Event Grid filters on event type and metadata | FHIR search criteria, `SubscriptionTopic` triggers, `filterBy`, FHIRPath |
-| Payload | Event Grid schema: resource type, ID, version, account; no resource body | FHIR notification Bundle (`empty`/`id-only`/`full-resource`) with `SubscriptionStatus` |
+| Payload | Event Grid schema: resource type, ID, version, account; no resource body | FHIR notification Bundle with `Parameters` status on R4 or `SubscriptionStatus` on R4B/R5; `empty`, `id-only` or `full-resource` content |
 | Source | `ResourceChangeData` (presumed) | `Transactions` + `Resource.TransactionId` (preferred); `ResourceChangeData` as a read-only alternative (section 6) |
 | Ordering / replay | No ordering guarantee; no replay of past changes | Ordered dispatch by `eventNumber` per subscription; undelivered events retained; `$events` replay post-v1 |
 
-**Required invariants (no behaviour change for existing events):**
+**Required rules (no behaviour change for existing events):**
 
-1. **No schema or contract changes** to `ResourceChangeData`, `ResourceChangeType`, `CaptureResourceIdsForChanges`, `FetchResourceChanges_3`, the partitioning sprocs, or `SqlServerFhirResourceChangeDataStore`. All new storage is additive: a `SubscriptionEvents` table and a new `Parameters` key.
+1. **No schema or contract changes** to `ResourceChangeData`, `ResourceChangeType`, `CaptureResourceIdsForChanges`, `FetchResourceChanges_3`, the partitioning stored procedures, or `SqlServerFhirResourceChangeDataStore`. New storage adds `SubscriptionEvents`, `SubscriptionStates` and keys in `dbo.Parameters`.
 2. **`SupportsResourceChangeCapture` stays independent** of the new `Subscriptions:Enabled` flag. Either can be on without the other.
-3. **No synchronous step is added to the write path.** Matching runs asynchronously after visibility, so a subscription cannot cause a write to fail or wait. Subscriptions do add load to the shared database (reads and `SubscriptionEvents` writes), which must be measured; see below. Events fire only for committed changes, which is consistent with the managed service not emitting events for failed transaction bundles.
+3. **No synchronous matching or delivery is added to other resource writes.** Subscription and topic API writes still need validation and grant handling. Background work adds shared database load, which must be measured. Only committed changes can notify; failed transaction bundles do not notify.
 4. **Hard-delete semantics are unchanged.** Hard delete stays out of both feeds in v1.
 
 **Shared costs to monitor when both are enabled:**
 
 - Additional reads against `Transactions` and `Resource` from the matching job, plus `SubscriptionEvents` writes. Measure these against the database budget alongside the `ResourceChangeData` writes, which are made inside `MergeResources`.
-- Interaction with `InvisibleHistoryCleanupWatchdog`. The managed pipeline does not depend on history, but version-exact matching does, so cleanup is gated on the subscription cursor (design decision 3).
+- Additional history storage from `MaxHistoryCleanupHoldHours`. Exact-version matching needs history, but cleanup does not wait for the subscription cursor (decision 3).
 
 **Product positioning:**
 
-- Present the two features as complementary. Events are for Azure-native fan-out of all changes. Subscriptions are for FHIR-standard, consumer-managed, filtered notifications such as Da Vinci or Backport IG clients.
-- The proposed Azure Event Grid channel (post-v1, phase 5) sends FHIR notification Bundles to a customer-owned topic. It must not reuse the `Microsoft.HealthcareApis.*` event types, to avoid confusion with system-topic events.
-- Longer term, an ADR could evaluate whether the managed events publisher should move to the `Transactions`-based pump, which would give it the same gapless ordering. It would **not** by itself add hard-delete coverage, because hard deletes are not exposed through `TransactionId` (section 5). Doing so is not required by, and not part of, this proposal.
+- Present the features as complementary. Events distribute supported resource changes through Azure. Subscriptions provide FHIR-standard, client-managed filters, including for Da Vinci or Backport IG clients.
+- The proposed Azure Event Grid channel (post-v1) sends FHIR notification Bundles to a customer-owned topic. It must not reuse the `Microsoft.HealthcareApis.*` event types, to avoid confusion with system-topic events.
+- A separate ADR could evaluate moving the managed events publisher to a transaction-based pump. It would need to address clock and history limits and would not by itself add hard-delete coverage (section 5). That work is outside this proposal.
 
 ## 10. Risks and open questions
 
 - **Event source.** `Transactions` (preferred) or the `ResourceChangeData` change feed (section 6). Both are implemented and `EventSource` selects one; awaiting product group guidance on the default.
-- **Throughput.** Matching cost is roughly *(changed resources) × (active subscriptions)*, and matching runs in a single leased pump. Index subscriptions by resource type and interaction, parallelise evaluation *within* a batch (committing in order), and make the number of active subscriptions configurable with a cap. If one pump is insufficient, partitioning by resource type is the fallback; the phase 0 benchmark decides.
-- **Head-of-line latency.** Long `$import` batches or stalled transactions delay all notifications (section 5). Decide the latency target and whether `$import` should opt out of notifications per operation.
-- **Write amplification.** Each match adds a `SubscriptionEvents` row; the retention watchdog is in the v1 gate.
-- **History retention.** Gating `InvisibleHistoryCleanupWatchdog` on the cursor delays cleanup while the pump is behind. Define a maximum lag after which events are recorded as `Unevaluable` instead of blocking cleanup. Separately, decide whether subscribed resource types must keep history (design decision 3); `UnversionedResourceTypes` implements both answers.
+- **Throughput.** One leased pump performs matching. `MaxActiveSubscriptions` caps subscriptions, but the default has not been measured on a representative deployment. The release gate requires a throughput measurement. Consider parallel matching within a batch or separate pumps by resource type only if results require them.
+- **Notification delay.** Long `$import` batches or stalled transactions delay all notifications (section 5). Set a latency target. Historical import behaviour is controlled by `NotifyHistoricalVersions`; there is no per-operation opt-out in v1.
+- **Storage load.** Each match adds a `SubscriptionEvents` row. Event cleanup and database load must be checked before release.
+- **History retention.** The fixed history hold can increase storage, but does not guarantee recovery after a longer backlog. Missing source rows may produce no numbered gap. Confirm the default `UnversionedResourceTypes` policy (decision 3).
 - **Authorization snapshot limits.** Snapshot-based checks cannot see identity-provider revocation. Decide the default maximum subscription lifetime (`MaxLifetimeDays`, currently 365), and whether certain roles may hold longer-lived subscriptions.
-- **Header secrets on read.** The spec says `Subscription` is not secret storage. Decide whether to redact `parameter`/`channel.header` values for readers without write permission.
+- **Header secrets on read.** The spec says `Subscription` is not secret storage. Header values are not logged, but redaction on read is not implemented. Decide whether readers without write permission should see them.
 - **Topic deletion and updates with active subscriptions.** Decide whether to reject topic deletion while subscriptions reference the topic, and whether trigger changes require subscriptions to be re-requested.
 
 ## 11. Lessons from prior attempts and delivery guardrails
@@ -374,39 +372,29 @@ None of the earlier PRs was rejected in review. None received human review comme
 4. **No visible reviewer assignment or linked work item.** Whether this reflected missing ownership or a priority decision is not recorded.
 5. **Prototype-level quality signals:** unfilled template, CodeQL findings, incomplete tests ("functional but limited test coverage" per the #5478 plan), and no performance evidence for the write-path-adjacent design.
 
-For contrast, related work taken through the normal process did merge: the watchdog cleanup that #4628 depended on (#3814), and the FHIRPath engine work, which went through ADR `adr-2608-ignixa-sdk-migration.md` and merged as staged PRs such as #5801. Neither was split out of the subscription branches, but both show that ADR-first, incremental PRs get reviewed.
+Related work did merge: the watchdog cleanup (#3814), and FHIRPath engine work under [ADR-2608](../adr-2608-ignixa-sdk-migration.md), including #5801. These examples support agreeing the design and keeping changes focused, but do not prove why the subscription PRs stalled.
 
 ### 11.2 Guardrails for this effort
 
 | # | Guardrail | Addresses |
 |---|---|---|
 | 1 | **ADR first.** [ADR-2611](../adr-2611-fhir-subscriptions.md) records the decision and must be **accepted by maintainers before feature code is opened for review.** It fixes the scope in sections 3-4 and the decisions in section 6. Code PRs link to the ADR. | 1 |
-| 2 | **One reviewable PR.** The feature ships as a single PR, inert behind `Subscriptions:Enabled=false`. To keep it reviewable, commits follow the phases of section 7, the schema migration is a separate commit, and the PR description maps each part to this design and its tests. | 2 |
+| 2 | **One feature PR.** The feature is disabled by default. Group commits by component (schema, event pump, resources and validation, matching, delivery), keep the schema migration in a separate commit, and link each part to its design and tests. | 2 |
 | 3 | **Strict scope.** Only subscriptions. SQL-on-FHIR, analytics materialization, and new channels beyond v1 are separate proposals. Prerequisites (for example, the in-memory evaluator, or the `DataActions.SubscriptionTopic` permission) merge first as standalone PRs with their own value and tests. | 3 |
-| 4 | **Ownership.** A tracking issue or work item with an owner, a named maintainer reviewer per phase, and a milestone. PRs carry the required labels and milestone so `Check Metadata` passes. A PR left unreviewed for two sprints is escalated in triage rather than left open. | 4 |
-| 5 | **Merge bar per PR:** PR template completed; CI green; zero new CodeQL findings; unit tests (xUnit/NSubstitute, Arrange-Act-Assert) for new behaviour; E2E tests for HTTP-facing changes; SQL changes include the static index and query assessment required by `AGENTS.md`. | 5 |
-| 6 | **Evidence before scale-sensitive phases.** Phase 0 benchmark results (event pump throughput, head-of-line latency, added database load) are attached to the ADR. Phase 3 and 4 PRs include load-test numbers from `tools/PerfTester`. The v1 release gate (section 7) must pass before release. | 5 |
+| 4 | **Ownership.** A tracking issue or work item with an owner, a named maintainer reviewer, and a milestone. PRs carry the required labels and milestone so `Check Metadata` passes. A PR left unreviewed for two sprints is escalated in triage rather than left open. | 4 |
+| 5 | **Checks before merge:** complete the PR template; pass CI; add no new CodeQL findings; add unit tests (xUnit/NSubstitute, Arrange-Act-Assert) for new behaviour and E2E tests for HTTP changes. SQL changes need the static index and query assessment required by `AGENTS.md`. | 5 |
+| 6 | **Measurements before release.** Attach the release-gate measurements to the ADR: pump throughput, notification delay and added database load. Include `tools/PerfTester` results in the feature PR. The v1 release gate (section 7) must pass. | 5 |
 | 7 | **Short-lived feature branch.** The branch is rebased on `main` regularly so it does not drift, and merges once the release gate passes. | 2, 3 |
 
-## 12. Implementation notes
+## 12. Prototype findings
 
-The implementation is on the `feature/fhir-subscriptions` branch. Where it settles a detail left open above, or differs from it:
+A prototype was built to test this design. Its findings inform the design, but are not release evidence:
 
-- **Storage.** Besides `SubscriptionEvents`, a `SubscriptionStates` table (schema version 123) holds each subscription's activation grant, content hash, activation watermark, last event number, error text and delivery lease. A changed content hash clears the activation, so the next handshake needs a new grant.
-- **Delivery.** Delivery is a hosted background service that takes a per-subscription lease in `SubscriptionStates`, rather than a `TaskManagement` job type. This keeps delivery single-flight per subscription across instances without one job per notification.
-- **Event source.** The pump reads through `ITransactionEventSource`, with a `Transactions` source and a `ResourceChangeData` source; `EventSource` selects one (default `Transactions`). Each source has its own cursor in `dbo.Parameters`. Change-feed records are mapped back to the writing transaction, so the activation watermark and the outbox key are the same for both sources. The change-feed source refuses to run unless change capture is enabled.
-- **Historical versions.** A version is *written as history* when a later version of the resource was already written by the same or an earlier transaction, as `$import` does when it loads history. Such versions notify only when `NotifyHistoricalVersions` is on (default off). The change feed does not record them.
-- **Unversioned types.** `UnversionedResourceTypes` is `AllowWithGaps` (default: unevaluable gaps, as above) or `RequireHistory` (topics on `no-version` types are rejected, including base-type triggers while any type is `no-version`).
-- **R4 topic profile.** The `Basic` topic StructureDefinition ships in the R4 server, is listed in `Basic.supportedProfile`, and is resolved by `$validate` without being uploaded.
-- **Metrics.** Pump progress and lag, events by outcome, notification attempts and duration by type and outcome, and server status changes, on the `FhirServer` meter.
-- **Activation race.** Each activation increments a counter in `dbo.Parameters`. The pump reads it before the states it matches with, and the enqueue refuses the page under lock if it changed, so a page matched without a just-activated subscription is matched again instead of committed. An activated subscription is matchable even if its stored status still says `requested`.
-- **Grant lifecycle.** A content change retires pending events, so they are never sent to a new endpoint or under new filters. `off`, `entered-in-error` and reaching `end` revoke the grant, and the registry rejects stored subscriptions whose `end` is missing or beyond `MaxLifetimeDays`, so writes outside the API cannot revive or extend a subscription. A missing grant is tolerated for a minute after an API write, which commits the resource just before the grant.
-- **Delivery.** The lease is renewed before every send for longer than the send's timeout; a lost lease stops the worker. The due-subscriptions query probes each activated subscription instead of reading the pending backlog. Rest-hook requests do not use a proxy, so the connect-time address check applies to the endpoint itself.
-- **Source fixed per database.** The pump records the source it first runs with. If a different source is configured later, the pump logs an error and does not run, leaving the cursor unchanged; setting the original source back resumes it. Switching is not supported because one source is expected to be chosen on product group guidance, and a hand-over between position spaces would add risk for a path not used in production.
-- **Availability.** The store reports whether it can be used (SQL Server at schema 123 or later). Until then subscription writes and `$status` return 503 (405 Method Not Allowed on other data stores, and for `$status` when the feature is off), delivery waits, and the CapabilityStatement does not advertise subscriptions.
-- **Transaction ordering.** Transaction ids are SQL clock time plus a sequence, so a backward clock step can give a later write a lower id. Laptop tests saw steps of about 0.7 s, and stranded transactions occur on unmodified main. The `Transactions` source stays `TransactionReadLagSeconds` (default 5) behind the newest ids, the activation filter uses the same margin, and transactions that commit below the cursor after it passed them are reported by `Subscriptions.LateTransactions`. The write path is unchanged.
-- **Error limit.** A subscription in `error` for longer than `MaxErrorHours` (default 72) is set to `off`, which retires its pending events, so an unreachable endpoint cannot grow the outbox without bound.
-- **Pump start.** On its first run the pump starts its cursor at the visibility watermark, or at the earliest existing activation watermark if that is lower, so a subscription activated before the pump first runs receives every later change.
-- **History.** Instead of gating `InvisibleHistoryCleanupWatchdog` on the cursor, the implementation keeps invisible history for at least `MaxHistoryCleanupHoldHours` while the feature is on. Versions removed earlier are recorded as `Unevaluable`. Tests confirm that `no-version` types lose earlier versions as described in decision 3.
-- **Limits.** Defaults are a 365-day maximum lifetime, 1,000 subscriptions in `requested`, `active` or `error`, 5 delivery attempts and a 60-second minimum heartbeat. All are configurable; see [Subscriptions](../../Subscriptions.md).
-- **Tests.** Unit tests (matching, authorization, validation, conversion, notification shapes, delivery lifecycle), SQL integration tests for the pump and outbox, and in-process E2E tests over HTTP with a local receiver run on R4, R4B and R5. No load or latency benchmark has been run, so guardrail 6 is still open.
+- **Availability.** The feature needs SQL Server schema 123 or later. When enabled on another data store, subscription writes and `$status` return 405. While a schema upgrade is pending, they return 503. Capabilities are advertised when the feature is enabled on a supporting store, including during a schema upgrade, because the CapabilityStatement is built once; the R4 topic-canonical extensions are refreshed on each periodic rebuild.
+- **Source recovery.** A changed source setting stops matching without advancing the cursor. Restoring the original source resumes matching only for records and versions still retained. The change-feed source requires `CoreFeatures:SupportsResourceChangeCapture=true`.
+- **Imported history.** A version counts as written as history if a later resource version was already written by the same or an earlier transaction. `NotifyHistoricalVersions` applies to these versions, not to ordinary writes that became history later.
+- **Grant timing.** An API write commits the resource before saving its grant. Background validation allows one minute for that grant to appear, without activating the subscription. Server status writes do not by themselves require a new grant.
+- **Endpoint checks.** Delivery renews the lease before every send and stops if the lease is lost. Rest-hook requests do not use a proxy, so connection-time address checks apply to the endpoint itself.
+- **Clock steps.** Laptop tests saw SQL clock steps of about 0.7 seconds. This led to the `TransactionReadLagSeconds` read delay (decision 4).
+- **Metrics.** The `FhirServer` meter should report pump progress and lag, event outcomes, notification attempts and duration, status changes, and late transactions.
+- **Tests.** The prototype has unit, SQL integration and in-process HTTP E2E tests for R4, R4B and R5. No load or latency measurement has been recorded.
