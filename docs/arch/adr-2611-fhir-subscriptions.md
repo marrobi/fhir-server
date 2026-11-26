@@ -25,6 +25,7 @@ The product group (PG) and maintainers must settle these before this ADR is acce
 | 9 | Confirm that Azure Health Data Services events read `ResourceChangeData` | Owner: managed service team | If the events service uses something else, re-check [section 9 of the proposal](Proposals/fhir-subscriptions-design.md#9-impact-on-azure-health-data-services-events). |
 | 10 | What happens when a client's webhook stays unreachable (`MaxErrorHours`) | Never switch it off (`0`, the default). The subscription stays in `error`, its waiting notifications are kept, and the server keeps checking the webhook (decision 11). Operators can set a limit if their policy requires one. | A time limit caps database growth, but an outage longer than the limit loses notifications and stops the subscription without the client noticing. For clinical workflows, that is worse than a growing backlog, which the metrics in decision 11 make visible. A cap on the number of waiting notifications, instead of time, would need a design change. |
 | 11 | How a subscription recovers from `error` (option group E) | E2: the server recovers on its own. Handshakes and heartbeats are retried like notifications. In `error`, the server sends a recovery handshake with growing gaps, up to every 15 minutes, until one succeeds. Metrics report subscriptions in `error` and waiting notifications. | E1 (manual only) leaves a subscription in `error` after a 30-second outage or one missed heartbeat until someone resets it. E3 (an operator job that resets `error` to `requested`) works, but must run in every deployment and writes a new version on every reset, which restarts the `MaxErrorHours` clock. See [recovery from error](#e-recovery-from-error). |
+| 12 | Whether editing a topic changes what existing subscriptions receive (option group F) | F1 for v1: topic edits apply straight away, limited by each subscription's grant, and are documented. | F2 limits each subscription to the resource types the topic covered when its grant was captured. F3 moves subscriptions to `error` when their grant cannot read a type the topic now covers. See [topic changes](#f-topic-changes-and-existing-subscriptions). |
 
 ## Context
 
@@ -150,6 +151,20 @@ Without automatic recovery, a subscription stays in `error` until someone writes
 
 **Monitoring.** Alert on `Subscriptions.InError` above zero for longer than an agreed time, and on `Subscriptions.OldestPendingEventAge` above the latency target. `Subscriptions.PendingEvents` shows how fast the backlog is growing. These metrics and the hazard log entry for unreachable webhooks are part of the release gate.
 
+### F. Topic changes and existing subscriptions
+
+A subscription names its topic by canonical URL. The subscription's content hash, and so its grant, covers that URL but not the topic's content. Topics are shared, and only callers with the `subscriptionTopic` permission can change them. When a topic author adds a trigger type, adds a base type such as `Resource`, or loosens the criteria, every subscription on that topic starts matching the new changes at once.
+
+Each event is still checked against the subscription's grant, so a subscriber never receives anything its creator cannot read. However, the creator's grant governs delivery and the endpoint can belong to someone else. A creator who agreed to send Encounters to a partner's endpoint can therefore find Observations going there too, after a topic edit the creator did not make. The R5 specification lets topics carry a `version`, and a subscription may name a versioned canonical (`url|version`) to pin one version.
+
+| # | Option | For | Against |
+|---|---|---|---|
+| F1 | **Apply topic edits straight away, and document it.** Advise topic authors to publish changes that widen a topic as a new topic resource, with a new version or canonical, and to leave the old one in place. Creators who need a fixed scope name a versioned canonical. | Matches how topics are shared in the spec. Fixes to a topic reach every subscriber without re-subscribing. No extra work. | The scope of an existing subscription can widen without its creator acting. It relies on topic authors, who already hold a privileged permission, following guidance. |
+| F2 | **Bind the grant to the topic's trigger types.** When the grant is captured, record the resource types the topic covers. Events of other types are not numbered or sent until the creator writes the subscription again. | A topic edit cannot add new resource types to an existing subscription. Small change to the grant and the authorization check. | Criteria changes within a type still apply. Adding a type to a topic silently does nothing for existing subscriptions until each creator renews, which may surprise topic authors. |
+| F3 | **Re-check grants against the current topic.** When topics change, check each subscription's grant can read every type the topic now covers, and set `error` if not. | Surfaces subscriptions whose creator cannot read the new types. | Does not address the consent gap: when the creator can read the new types, they flow to the endpoint as in F1. One topic edit can stop many subscriptions. |
+
+**Recommended: F1 for v1.** Topic authors are trusted administrators, and per-event authorization still limits every subscription to its creator's access. Revisit F2 if customers let less-trusted parties author topics, or ask for a subscription's scope to be fixed when it is created.
+
 ## Proposed decision
 
 Accepting this ADR means agreeing to build FHIR topic-based subscriptions as follows. Answers to the [decisions requested](#decisions-requested) may change individual rows.
@@ -162,6 +177,7 @@ Accepting this ADR means agreeing to build FHIR topic-based subscriptions as fol
 | How are webhook credentials handled? (C) | **C1:** allow headers, and document that they are not secure storage | Matches the spec. Stronger options can follow. |
 | How is the code delivered? (D) | **D2:** five PRs into `main`, each off by default | Each PR is small enough to review. |
 | How does a subscription recover from `error`? (E) | **E2:** the server retries handshakes and heartbeats, keeps checking an endpoint in `error`, and never switches it `off` by default | Outages end without anyone acting, and no notifications are discarded. Metrics make stuck subscriptions and backlogs visible. |
+| Do topic edits reach existing subscriptions? (F) | **F1:** yes, limited by each subscription's grant, and documented | Topics are shared and curated by trusted administrators. Per-event authorization still applies. |
 
 The v1 scope is in [proposal section 3](Proposals/fhir-subscriptions-design.md#3-feature-support-matrix), and the design in [proposal section 6](Proposals/fhir-subscriptions-design.md#6-implementation-design).
 
