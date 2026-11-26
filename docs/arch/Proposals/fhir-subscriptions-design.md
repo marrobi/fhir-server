@@ -38,7 +38,7 @@ Status: Draft proposal. [ADR-2611: FHIR Topic-Based Subscriptions](../adr-2611-f
 | Event worker (pump) | The single background worker that reads changes, matches them and stores events. |
 | Outbox | The `dbo.SubscriptionEvents` table. Events wait there until they are sent. |
 | Lease | A time-limited lock in the database that lets only one instance do a piece of work. |
-| Grant | A stored copy of the subscriber's access, captured when the subscription is created or renewed through the API. |
+| Grant | A stored copy of the access of the identity that created or renewed the subscription through the API. It governs delivery, even when the endpoint belongs to someone else. |
 | `Unevaluable` | An event recorded when a change is known but the version needed to match it is gone. It uses an event number but is not sent. |
 | Fail closed | If access cannot be confirmed, nothing is sent. |
 
@@ -228,11 +228,11 @@ Filters and criteria are evaluated **in memory** against the changed resource an
 
 | Feature | Spec | Support |
 |---|---|---|
-| **Access captured on API writes.** On create or update, the server stores a grant with the caller's identity, roles, SMART scopes and compartment. The caller needs read access to each resource type in the topic. | SHALL enforce policy | ✅ v1 |
-| **Access checked for every event and payload level**, including retries and status counts. The worker checks the grant before assigning an event number, so changes outside the grant are not numbered or sent (R5 §3.9.8). Delivery checks again for local revocation. A denial at that point may leave a numbered gap. | SHOULD | ✅ v1. The grant cannot see access removed in the identity provider. Local controls are checks against current server roles, an administrator switching the subscription `off` or deleting it, the client's own `end`, and the optional `MaxLifetimeDays`. Renewing through the API captures a fresh grant. |
+| **Access captured on API writes.** On create or update, the server stores a grant with the caller's identity, roles, SMART scopes and compartment. The caller needs search access (`read` or `search`, not read-by-id alone) to each resource type in the topic, because a subscription acts as a standing search. A write by another identity that leaves the content unchanged keeps the stored grant. | SHALL enforce policy | ✅ v1 |
+| **Access checked for every event and payload level**, including retries and status counts. The worker checks the grant before assigning an event number, so changes outside the grant are not numbered or sent (R5 §3.9.8). Delivery checks again for local revocation. A denial at that point may leave a numbered gap. | SHOULD | ✅ v1. The grant cannot see access removed in the identity provider. Local controls are checks against current server roles, an administrator switching the subscription `off` or deleting it, the client's own `end`, and the optional `MaxLifetimeDays`. Renewing through the API by the same identity captures a fresh grant. |
 | New `DataActions.SubscriptionTopic` permission. It is required when **either the existing or the new** resource is a topic (R4B and R5 `SubscriptionTopic`, or R4 `Basic` with the topic code). This covers create, update, delete and conditional writes. Reading and searching topics needs only `Read`. | Server policy | ✅ v1. Follows the `DataActions.SearchParameter` pattern. `DataActions.All` must include it. |
 | **Validation when stored resources are loaded.** `$import` and bulk update skip API validation, so the registry validates topics and subscriptions again before use (design decision 8). | Server policy | ✅ v1. Stops imported subscriptions from bypassing endpoint or access checks. |
-| HTTPS-only endpoints, an optional host allow-list, and blocking of loopback, private and link-local addresses | Recommended | ✅ v1. The development-only settings `AllowHttpEndpoints` and `AllowPrivateNetworkEndpoints` relax these checks. |
+| HTTPS-only endpoints, an optional host allow-list, and blocking of non-public addresses | Recommended | ✅ v1. Loopback and private networks are allowed only when listed in `AllowedPrivateNetworks`. Link-local (including cloud metadata), the Azure platform address `168.63.129.16`, multicast and reserved addresses are never allowed. `AllowHttpEndpoints` is for local development only. Private delivery on the managed service is an open question (section 10.1). |
 | Limiting `full-resource` per client or role, beyond the normal access checks | MAY | ⏳ Later |
 | Recording sent notifications as `AuditEvent` or `Communication` resources | Encouraged | ❌ No. Existing audit logging and telemetry are used instead. |
 
@@ -446,7 +446,8 @@ All settings are under `FhirServer:Subscriptions`. **PG** marks defaults the pro
 | `MinHeartbeatPeriodSeconds` | 60 | Shortest heartbeat a client may request. |
 | `MaxEventsPerNotification` | 20 | Cap on `maxCount`. |
 | `AllowedEndpointHosts` | empty (any public host) | Optional host allow-list. `*.` matches subdomains. |
-| `AllowHttpEndpoints` / `AllowPrivateNetworkEndpoints` | `false` / `false` | For local development only. |
+| `AllowHttpEndpoints` | `false` | For local development only. |
+| `AllowedPrivateNetworks` | empty (public addresses only) | CIDR ranges, such as `10.20.0.0/16`, of loopback or private networks that may receive notifications. For self-hosted servers whose webhooks are on the same private network. Cannot allow link-local, metadata, platform, multicast or reserved addresses. |
 
 ## 7. v1 release gate
 
@@ -570,6 +571,7 @@ The open decisions are listed once, in the ADR's [Decisions requested](../adr-26
 | `ResourceChangeData` retention is managed by the events pipeline | A change-feed reader that falls behind could lose events. | Managed service team |
 | The `TABLOCK, HOLDLOCK` reader has an acceptable effect on writes | Applies only if the change-feed source is chosen. | SQL owners |
 | A 5-second read margin covers SQL clock steps in production | Prototype laptops saw steps of about 0.7 seconds. Production behaviour is not measured. | SQL owners |
+| How the managed service delivers notifications to webhooks on a customer's private network | Many clinical integrations accept traffic only over private networks. The service runs outside the customer's virtual network, so a private address it resolves is on the service's own network, not the customer's. `AllowedPrivateNetworks` must stay empty there, or it opens request forgery into the service. Private delivery needs a managed outbound path, such as a managed private endpoint or shared private link to the customer's resource, or the managed-identity Azure channels planned after v1 (ADR option C4). Until then, managed service webhooks must be publicly reachable. | Managed service team |
 
 ### 10.2 Risks
 
