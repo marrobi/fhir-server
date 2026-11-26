@@ -38,7 +38,7 @@ Status: Draft proposal. [ADR-2611: FHIR Topic-Based Subscriptions](../adr-2611-f
 | Event worker (pump) | The single background worker that reads changes, matches them and stores events. |
 | Outbox | The `dbo.SubscriptionEvents` table. Events wait there until they are sent. |
 | Lease | A time-limited lock in the database that lets only one instance do a piece of work. |
-| Grant | A stored copy of the subscriber's access, captured when the subscription is created or renewed through the API. |
+| Grant | A stored copy of the access of the identity that created or renewed the subscription through the API. It governs delivery, even when the endpoint belongs to someone else. |
 | `Unevaluable` | An event recorded when a change is known but the version needed to match it is gone. It uses an event number but is not sent. |
 | Fail closed | If access cannot be confirmed, nothing is sent. |
 
@@ -228,8 +228,8 @@ Filters and criteria are evaluated **in memory** against the changed resource an
 
 | Feature | Spec | Support |
 |---|---|---|
-| **Access captured on API writes.** On create or update, the server stores a grant with the caller's identity, roles, SMART scopes and compartment. The caller needs read access to each resource type in the topic. | SHALL enforce policy | ✅ v1 |
-| **Access checked for every event and payload level**, including retries and status counts. The worker checks the grant before assigning an event number, so changes outside the grant are not numbered or sent (R5 §3.9.8). Delivery checks again for local revocation. A denial at that point may leave a numbered gap. | SHOULD | ✅ v1. The grant cannot see access removed in the identity provider. Local controls are checks against current server roles, an administrator switching the subscription `off` or deleting it, the client's own `end`, and the optional `MaxLifetimeDays`. Renewing through the API captures a fresh grant. |
+| **Access captured on API writes.** On create or update, the server stores a grant with the caller's identity, roles, SMART scopes and compartment. The caller needs search access (`read` or `search`, not read-by-id alone) to each resource type in the topic, because a subscription acts as a standing search. A write by another identity that leaves the content unchanged keeps the stored grant. | SHALL enforce policy | ✅ v1 |
+| **Access checked for every event and payload level**, including retries and status counts. The worker checks the grant before assigning an event number, so changes outside the grant are not numbered or sent (R5 §3.9.8). Delivery checks again for local revocation. A denial at that point may leave a numbered gap. | SHOULD | ✅ v1. The grant cannot see access removed in the identity provider. Local controls are checks against current server roles, an administrator switching the subscription `off` or deleting it, the client's own `end`, and the optional `MaxLifetimeDays`. Renewing through the API by the same identity captures a fresh grant. |
 | New `DataActions.SubscriptionTopic` permission. It is required when **either the existing or the new** resource is a topic (R4B and R5 `SubscriptionTopic`, or R4 `Basic` with the topic code). This covers create, update, delete and conditional writes. Reading and searching topics needs only `Read`. | Server policy | ✅ v1. Follows the `DataActions.SearchParameter` pattern. `DataActions.All` must include it. |
 | **Validation when stored resources are loaded.** `$import` and bulk update skip API validation, so the registry validates topics and subscriptions again before use (design decision 8). | Server policy | ✅ v1. Stops imported subscriptions from bypassing endpoint or access checks. |
 | HTTPS-only endpoints, an optional host allow-list, and blocking of loopback, private and link-local addresses | Recommended | ✅ v1. The development-only settings `AllowHttpEndpoints` and `AllowPrivateNetworkEndpoints` relax these checks. |
