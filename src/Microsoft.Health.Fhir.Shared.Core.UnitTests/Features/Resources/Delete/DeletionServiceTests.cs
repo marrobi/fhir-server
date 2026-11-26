@@ -30,6 +30,7 @@ using Microsoft.Health.Fhir.Core.Features.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Search;
 using Microsoft.Health.Fhir.Core.Features.Search.Parameters;
 using Microsoft.Health.Fhir.Core.Features.Security;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Validation;
 using Microsoft.Health.Fhir.Core.Messages.Delete;
 using Microsoft.Health.Fhir.Core.Models;
@@ -66,6 +67,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Resources.Delete
         private readonly IResourceDeserializer _resourceDeserializer = Substitute.For<IResourceDeserializer>();
         private readonly IProvideProfilesForValidation _profilesProvider = Substitute.For<IProvideProfilesForValidation>();
         private readonly IAuthorizationService<DataActions> _authorizationService = Substitute.For<IAuthorizationService<DataActions>>();
+        private readonly ISubscriptionStore _subscriptionStore = Substitute.For<ISubscriptionStore>();
         private readonly ILogger<DeletionService> _logger = Substitute.For<ILogger<DeletionService>>();
         private readonly DeletionService _service;
 
@@ -110,6 +112,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Resources.Delete
                 _resourceDeserializer,
                 _profilesProvider,
                 _authorizationService,
+                _subscriptionStore,
                 _logger);
         }
 
@@ -453,6 +456,56 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Resources.Delete
                 Arg.Any<string>(),
                 Arg.Any<string>(),
                 Arg.Is<IReadOnlyDictionary<string, string>>(d => d.ContainsKey("Affected Items")));
+        }
+
+        [Theory]
+        [InlineData(DeleteOperation.SoftDelete, true)]
+        [InlineData(DeleteOperation.HardDelete, true)]
+        [InlineData(DeleteOperation.PurgeHistory, false)]
+        public async Task GivenABulkDeleteOfSubscriptions_WhenResourcesAreDeleted_ThenTheirStateIsRemovedUnlessOnlyHistoryIsPurged(DeleteOperation deleteOperation, bool expectRemoved)
+        {
+            // Arrange
+            var request = new ConditionalDeleteResourceRequest(
+                KnownResourceTypes.Subscription,
+                new List<Tuple<string, string>> { Tuple.Create("_lastUpdated", "2000-01-01T00:00:00Z") },
+                deleteOperation,
+                maxDeleteCount: 10,
+                deleteAll: false);
+
+            var searchService = Substitute.For<ISearchService>();
+            var scopedSearchService = Substitute.For<IScoped<ISearchService>>();
+            scopedSearchService.Value.Returns(searchService);
+            _searchServiceFactory.Invoke().Returns(scopedSearchService);
+
+            var resource = new Subscription { Id = "s1", Meta = new Meta { VersionId = "1" } };
+            var wrapper = new ResourceWrapper(
+                resource.ToResourceElement(),
+                new RawResource(resource.ToJson(), FhirResourceFormat.Json, isMetaSet: false),
+                Substitute.For<ResourceRequest>(),
+                false,
+                null,
+                Substitute.For<CompartmentIndices>(),
+                new List<KeyValuePair<string, string>>(),
+                "hash");
+            searchService.SearchAsync(
+                Arg.Any<string>(),
+                Arg.Any<IReadOnlyList<Tuple<string, string>>>(),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<bool>(),
+                Arg.Any<ResourceVersionType>(),
+                Arg.Any<bool>(),
+                Arg.Any<bool>()).Returns(
+                Task.FromResult(new SearchResult([new SearchResultEntry(wrapper, SearchEntryMode.Match)], null, null, Array.Empty<Tuple<string, string>>())));
+
+            var scopedDataStore = new DeletionServiceScopedDataStore(CreateFhirDataStore());
+            _dataStoreFactory.GetScopedDataStore().Returns(scopedDataStore);
+            _resourceWrapperFactory.Create(Arg.Any<ResourceElement>(), true, false).Returns(wrapper);
+
+            // Act
+            await _service.DeleteMultipleAsync(request, CancellationToken.None);
+
+            // Assert
+            await _subscriptionStore.Received(expectRemoved ? 1 : 0).DeleteStateAsync("s1", Arg.Any<CancellationToken>());
         }
 
         [Theory]

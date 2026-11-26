@@ -135,10 +135,12 @@ namespace Microsoft.Health.Fhir.Core.Configs
         public bool AllowHttpEndpoints { get; set; }
 
         /// <summary>
-        /// Gets or sets a value indicating whether endpoints on loopback, private, or link-local addresses are allowed.
-        /// Intended for local development only.
+        /// Gets the private networks, as CIDR ranges such as <c>10.20.0.0/16</c>, that may receive notifications. By default only public
+        /// addresses may. Loopback (<c>127.0.0.0/8</c>, <c>::1/128</c>), private, carrier-grade NAT and unique local addresses are
+        /// allowed only when an entry covers them. Link-local (including cloud metadata endpoints), the Azure platform address,
+        /// multicast and reserved addresses are never allowed.
         /// </summary>
-        public bool AllowPrivateNetworkEndpoints { get; set; }
+        public IList<string> AllowedPrivateNetworks { get; } = new List<string>();
 
         /// <summary>
         /// Gets the allow-list of endpoint host names. When non-empty, only these hosts (or their subdomains when the

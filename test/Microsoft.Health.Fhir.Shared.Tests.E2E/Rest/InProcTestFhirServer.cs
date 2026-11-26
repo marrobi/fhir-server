@@ -67,7 +67,7 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest
                 // Deliver to a local HTTP receiver with short intervals so tests observe lifecycle transitions quickly.
                 configuration["FhirServer:Subscriptions:Enabled"] = "true";
                 configuration["FhirServer:Subscriptions:AllowHttpEndpoints"] = "true";
-                configuration["FhirServer:Subscriptions:AllowPrivateNetworkEndpoints"] = "true";
+                configuration["FhirServer:Subscriptions:AllowedPrivateNetworks:0"] = "127.0.0.0/8";
                 configuration["FhirServer:Subscriptions:RegistryRefreshIntervalSeconds"] = "1";
                 configuration["FhirServer:Subscriptions:DeliveryPollingIntervalSeconds"] = "0.5";
                 configuration["FhirServer:Subscriptions:PumpPeriodSeconds"] = "0.5";

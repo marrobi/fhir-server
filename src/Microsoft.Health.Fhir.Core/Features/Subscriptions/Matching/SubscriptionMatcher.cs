@@ -72,6 +72,30 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
         }
 
         /// <summary>
+        /// Returns true when matching an update to <paramref name="change"/> depends on its previous version, through
+        /// <c>queryCriteria.previous</c> or a FHIRPath criterion that uses <c>%previous</c>.
+        /// </summary>
+        /// <param name="topic">The subscription topic.</param>
+        /// <param name="change">The resource change.</param>
+        /// <returns>Whether an applicable trigger reads the previous version.</returns>
+        public static bool DependsOnPrevious(SubscriptionTopicInfo topic, ResourceChange change)
+        {
+            EnsureArg.IsNotNull(topic, nameof(topic));
+            EnsureArg.IsNotNull(change, nameof(change));
+
+            if (change.Interaction != SubscriptionInteraction.Update)
+            {
+                return false;
+            }
+
+            return topic.ResourceTriggers.Any(trigger =>
+                AppliesTo(trigger.Resource, change.ResourceType) &&
+                (trigger.SupportedInteractions.Count == 0 || trigger.SupportedInteractions.Contains(change.Interaction)) &&
+                (!string.IsNullOrWhiteSpace(trigger.QueryCriteria?.Previous) ||
+                 (!string.IsNullOrWhiteSpace(trigger.FhirPathCriteria) && FhirPathCriteriaEvaluator.UsesPrevious(trigger.FhirPathCriteria))));
+        }
+
+        /// <summary>
         /// Matches a change against a topic and the subscription's filters.
         /// </summary>
         /// <param name="topic">The subscription topic.</param>

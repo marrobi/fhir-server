@@ -79,7 +79,7 @@ Settings are under `FhirServer:Subscriptions`.
 |---------|---------|-------------|
 | `Enabled` | `false` | Turns the feature on. |
 | `AllowHttpEndpoints` | `false` | Allow `http://` endpoints. Dev/test only. |
-| `AllowPrivateNetworkEndpoints` | `false` | Allow endpoints that resolve to loopback, private or link-local addresses. Dev/test only. |
+| `AllowedPrivateNetworks` | empty | CIDR ranges of loopback or private networks that may receive notifications, for example `10.20.0.0/16`, `127.0.0.0/8` or `::1/128`. By default only public addresses can. Link-local (including cloud metadata endpoints), `168.63.129.16`, multicast and reserved addresses are always blocked. An invalid entry makes subscription writes and deliveries fail with an error that names it. |
 | `AllowedEndpointHosts` | empty | If set, only these hosts (or subdomains, for entries starting with `*.`) can receive notifications. |
 | `MaxActiveSubscriptions` | `1000` | Limit on subscriptions in `requested`, `active` or `error`. |
 | `MaxLifetimeDays` | `365` | Maximum time until `end`. `0` disables the limit. |
@@ -100,7 +100,7 @@ Settings are under `FhirServer:Subscriptions`.
 | `RegistryRefreshIntervalSeconds` | `10` | How often each instance reloads subscriptions and topics. |
 | `DeliveryPollingIntervalSeconds` / `DeliveryLeaseSeconds` | `1` / `60` | Delivery polling, and the per-subscription lease that keeps delivery ordered across instances. Before each send the lease is renewed for at least the send's timeout plus 30 seconds. |
 
-Endpoints must be absolute `https://` URLs with no user information. Every resolved address is checked again when connecting, so DNS changes cannot redirect notifications to a blocked address. Headers that control the HTTP connection (`Host`, `Content-Type`, `Content-Length`, `Connection` and similar) cannot be set on a subscription.
+Endpoints must be absolute `https://` URLs with no user information. They must resolve to public addresses, or to a private network listed in `AllowedPrivateNetworks`. Every resolved address is checked again when connecting, so DNS changes cannot redirect notifications to a blocked address. List only the networks your webhooks are on, never the server's own infrastructure. On a hosted service whose network is not yours, keep the list empty. Headers that control the HTTP connection (`Host`, `Content-Type`, `Content-Length`, `Connection` and similar) cannot be set on a subscription.
 
 The capacity defaults (`MaxActiveSubscriptions`, `PumpPeriodSeconds`, `PumpTransactionBatchSize`, `MaxEventsPerNotification`, `TransactionReadLagSeconds`) are provisional: they have not been sized by a benchmark on a representative deployment.
 
@@ -157,8 +157,10 @@ The server emits these instruments on the `FhirServer` meter:
 
 ## Authorization
 
-- Creating, updating or deleting a topic needs the `subscriptionTopic` data action, in addition to `write` or `delete`. `*` includes it. See [Roles](Roles.md).
-- Creating a subscription needs `write` on `Subscription` and read access to every resource type its topic triggers on.
+- Creating, updating or deleting a topic needs the `subscriptionTopic` data action, in addition to `write` or `delete`. `*` includes it. See [Roles](Roles.md). With subscriptions enabled, a `$bulk-update` that may reach topics also needs it: one on the topic resource type (every `Basic` on R4), one across all types, or one with `_include` or `_revinclude`. `$import` and `$bulk-delete` do not check it, so grant those roles only to trusted administrators.
+- Editing a topic changes what every subscription on it receives straight away, limited by each subscription's grant. Publish changes that widen a topic as a new topic resource, with a new version or canonical, and keep the old one. A subscription that names a versioned canonical (`url|version`) stays on that version.
+- Creating a subscription needs `write` on `Subscription` and search access (`read` or `search`; SMART `s`) to every resource type its topic triggers on. A subscription reports every matching resource, so read-by-id access alone (`readById`; SMART v2 `r` without `s`) is not enough.
+- The creator's grant governs delivery. The grant is captured from the identity that sets the subscription's content (topic, filters, channel, endpoint, headers or payload), not from the owner of the endpoint, and it is used for every notification. A write by another identity that leaves the content unchanged, for example extending `end` or requesting a handshake again, keeps the stored grant. Only the same identity can refresh it. The maximum lifetime counts from when the grant was captured. A service that creates subscriptions for other parties under its own identity must enforce each party's access itself. For example, it can receive notifications at its own endpoint and forward only what each party may see, or pass that party's own token to the server. Delegated subscription management is not supported.
 - Events are filtered against the subscription's grant: roles (re-checked against the current `roles.json`), SMART scopes including scope search parameters, and the patient compartment for patient-scoped tokens.
 - The grant cannot detect identity-provider revocation. Stop or delete the subscription to revoke it locally. The maximum lifetime forces periodic renewal unless that limit is disabled.
 - `$status` needs read access to the subscription.

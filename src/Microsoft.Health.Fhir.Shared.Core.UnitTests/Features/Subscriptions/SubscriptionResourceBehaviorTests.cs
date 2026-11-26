@@ -53,16 +53,18 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         private readonly IAuthorizationService<DataActions> _authorizationService = Substitute.For<IAuthorizationService<DataActions>>();
         private readonly SubscriptionsConfiguration _configuration = new() { Enabled = true, MaxLifetimeDays = 30, MaxActiveSubscriptions = 2 };
         private readonly SubscriptionResourceBehavior _behavior;
+        private readonly FhirRequestContext _requestContext;
 
         public SubscriptionResourceBehaviorTests(SubscriptionTestFixture fixture)
         {
             _resources = new InMemorySubscriptionResources(_converter);
             var registry = new SubscriptionRegistry(_resources, _converter, _store, fixture.CreateValidator(_configuration), NullLogger<SubscriptionRegistry>.Instance);
             var accessor = Substitute.For<RequestContextAccessor<IFhirRequestContext>>();
-            accessor.RequestContext.Returns(new FhirRequestContext("POST", "https://fhir.example/Subscription", "https://fhir.example/", "c1", new Dictionary<string, StringValues>(), new Dictionary<string, StringValues>())
+            _requestContext = new FhirRequestContext("POST", "https://fhir.example/Subscription", "https://fhir.example/", "c1", new Dictionary<string, StringValues>(), new Dictionary<string, StringValues>())
             {
                 Principal = new System.Security.Claims.ClaimsPrincipal(),
-            });
+            };
+            accessor.RequestContext.Returns(_requestContext);
 
             _authorizationService.CheckAccess(Arg.Any<DataActions>(), Arg.Any<CancellationToken>()).Returns(c => c.ArgAt<DataActions>(0));
 
@@ -231,6 +233,67 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             Assert.Null(_store.States["s1"].ContentHash);
         }
 
+        [Fact]
+        public async Task GivenASubscriptionGrantedToOneIdentity_WhenAnotherIdentityWritesItWithoutContentChanges_ThenTheStoredGrantIsKept()
+        {
+            // Arrange
+            _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
+            SignInAs("creator");
+            ResourceElement created = null;
+            await UpsertAsync(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "s1")), r => created = r);
+            _resources.Put(created);
+
+            // Act
+            SignInAs("administrator");
+            await UpsertAsync(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "s1")));
+
+            // Assert
+            Assert.Equal("creator", SubscriptionGrant.Deserialize(_store.States["s1"].Grant).Subject);
+        }
+
+        [Fact]
+        public async Task GivenASubscriptionGrantedToOneIdentity_WhenAnotherIdentityChangesItsContent_ThenTheWritersGrantIsCaptured()
+        {
+            // Arrange
+            _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
+            SignInAs("creator");
+            ResourceElement created = null;
+            await UpsertAsync(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "s1")), r => created = r);
+            _resources.Put(created);
+
+            // Act
+            SignInAs("administrator");
+            ResourceElement moved = null;
+            await UpsertAsync(Parse(SubscriptionResources.Subscription(TopicUrl, "https://other.example.com/", id: "s1")), r => moved = r);
+
+            // Assert
+            Assert.Equal("administrator", SubscriptionGrant.Deserialize(_store.States["s1"].Grant).Subject);
+            Assert.Equal(SubscriptionStatusCode.Requested, _converter.ToSubscription(moved).Status);
+        }
+
+        [Fact]
+        public async Task GivenAKeptGrant_WhenAnotherIdentityExtendsTheEnd_ThenTheLifetimeStillCountsFromTheGrant()
+        {
+            // Arrange: a grant captured 20 days ago, with a 30-day maximum lifetime.
+            _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
+            ResourceElement existing = Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "s1"));
+            _resources.Put(existing);
+            string hash = _converter.ToSubscription(existing).ComputeContentHash();
+            DateTimeOffset grantedUtc = DateTimeOffset.UtcNow.AddDays(-20);
+            await _store.SaveGrantAsync("s1", hash, new SubscriptionGrant { ContentHash = hash, Subject = "creator", CreatedUtc = grantedUtc }.Serialize(), CancellationToken.None);
+            SignInAs("administrator");
+
+            // Act
+            ResourceElement written = null;
+            await UpsertAsync(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "s1", end: DateTimeOffset.UtcNow.AddDays(30))), r => written = r);
+
+            // Assert
+            DateTimeOffset? end = _converter.ToSubscription(written).End;
+            Assert.NotNull(end);
+            Assert.InRange(end.Value, grantedUtc.AddDays(30).AddMinutes(-1), grantedUtc.AddDays(30).AddMinutes(1));
+            Assert.Equal("creator", SubscriptionGrant.Deserialize(_store.States["s1"].Grant).Subject);
+        }
+
         [Theory]
         [InlineData(SubscriptionStoreAvailability.NotSupported, typeof(OperationNotImplementedException))]
         [InlineData(SubscriptionStoreAvailability.NotReady, typeof(ServiceUnavailableException))]
@@ -257,6 +320,16 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             await _behavior.HandleAsync(new DeleteResourceRequest("Subscription", "s1", DeleteOperation.SoftDelete), () => Task.FromResult(new DeleteResourceResponse(new ResourceKey("Subscription", "s1"))), CancellationToken.None);
 
             Assert.False(_store.States.ContainsKey("s1"));
+        }
+
+        [Fact]
+        public async Task GivenASubscription_WhenItsHistoryIsPurged_ThenItsStateIsKept()
+        {
+            await _store.SaveGrantAsync("s1", "h", "{}", CancellationToken.None);
+
+            await _behavior.HandleAsync(new DeleteResourceRequest("Subscription", "s1", DeleteOperation.PurgeHistory), () => Task.FromResult(new DeleteResourceResponse(new ResourceKey("Subscription", "s1"))), CancellationToken.None);
+
+            Assert.Equal("{}", _store.States["s1"].Grant);
         }
 
         [Fact]
@@ -317,6 +390,11 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             Assert.Empty(_store.States);
         }
 #endif
+
+        private void SignInAs(string subject)
+        {
+            _requestContext.Principal = new System.Security.Claims.ClaimsPrincipal(new System.Security.Claims.ClaimsIdentity([new System.Security.Claims.Claim("oid", subject)], "test"));
+        }
 
         private System.Threading.Tasks.Task<UpsertResourceResponse> CreateAsync(ResourceElement resource, Action<ResourceElement> capture = null)
         {

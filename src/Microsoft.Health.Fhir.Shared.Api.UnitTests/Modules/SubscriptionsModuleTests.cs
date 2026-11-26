@@ -68,7 +68,16 @@ namespace Microsoft.Health.Fhir.Api.UnitTests.Modules
             }
         }
 
-        private static SubscriptionEndpointPolicy Policy(bool allowPrivate) =>
-            new(Options.Create(new SubscriptionsConfiguration { AllowHttpEndpoints = true, AllowPrivateNetworkEndpoints = allowPrivate }));
+        private static SubscriptionEndpointPolicy Policy(bool allowPrivate)
+        {
+            var configuration = new SubscriptionsConfiguration { AllowHttpEndpoints = true };
+            if (allowPrivate)
+            {
+                configuration.AllowedPrivateNetworks.Add("127.0.0.0/8");
+                configuration.AllowedPrivateNetworks.Add("::1/128");
+            }
+
+            return new(Options.Create(configuration));
+        }
     }
 }

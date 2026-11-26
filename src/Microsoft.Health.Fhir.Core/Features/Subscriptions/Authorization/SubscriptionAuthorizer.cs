@@ -24,7 +24,9 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Authorization
     public sealed class SubscriptionAuthorizer
     {
         private const string AllResources = "all";
-        private const DataActions ReadActions = DataActions.Read | DataActions.ReadById | DataActions.Search;
+
+        // A subscription reports every matching resource, so it is a standing search: ReadById (SMART v2 ".r") is not enough.
+        private const DataActions ReadActions = DataActions.Read | DataActions.Search;
 
         private readonly SecurityConfiguration _securityConfiguration;
         private readonly AuthorizationConfiguration _authorizationConfiguration;

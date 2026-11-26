@@ -4,6 +4,7 @@
 // -------------------------------------------------------------------------------------------------
 
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Net;
@@ -15,17 +16,21 @@ using Microsoft.Health.Fhir.Core.Configs;
 namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Channels
 {
     /// <summary>
-    /// Server policy for notification endpoints: HTTPS, an optional host allow-list, and no loopback, private, link-local
-    /// or other non-public addresses. Literal addresses are checked when a subscription is written, and every resolved
-    /// address is checked again when a connection is opened, which also defeats DNS rebinding.
+    /// Server policy for notification endpoints: HTTPS, an optional host allow-list, and public addresses only, except for
+    /// loopback and private networks listed in <see cref="SubscriptionsConfiguration.AllowedPrivateNetworks"/>. Link-local
+    /// (including cloud metadata), platform, multicast and reserved addresses are never allowed. Literal addresses are checked
+    /// when a subscription is written, and every resolved address is checked again when a connection is opened, which also
+    /// defeats DNS rebinding.
     /// </summary>
     public sealed class SubscriptionEndpointPolicy
     {
         private readonly SubscriptionsConfiguration _configuration;
+        private readonly IReadOnlyList<IPNetwork> _allowedPrivateNetworks;
 
         public SubscriptionEndpointPolicy(IOptions<SubscriptionsConfiguration> configuration)
         {
             _configuration = EnsureArg.IsNotNull(configuration?.Value, nameof(configuration));
+            _allowedPrivateNetworks = _configuration.AllowedPrivateNetworks.Select(ParseNetwork).ToList();
         }
 
         /// <summary>
@@ -62,19 +67,14 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Channels
                 return false;
             }
 
-            if (!_configuration.AllowPrivateNetworkEndpoints)
+            bool localhost = string.Equals(uri.IdnHost, "localhost", StringComparison.OrdinalIgnoreCase) || uri.IdnHost.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase);
+            bool addressAllowed = localhost
+                ? IsAddressAllowed(IPAddress.Loopback) || IsAddressAllowed(IPAddress.IPv6Loopback)
+                : !IPAddress.TryParse(uri.IdnHost.Trim('[', ']'), out IPAddress address) || IsAddressAllowed(address);
+            if (!addressAllowed)
             {
-                if (string.Equals(uri.IdnHost, "localhost", StringComparison.OrdinalIgnoreCase) || uri.IdnHost.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase))
-                {
-                    error = string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionEndpointAddressNotAllowed, uri.Host);
-                    return false;
-                }
-
-                if (IPAddress.TryParse(uri.IdnHost.Trim('[', ']'), out IPAddress address) && IsNonPublic(address))
-                {
-                    error = string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionEndpointAddressNotAllowed, uri.Host);
-                    return false;
-                }
+                error = string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionEndpointAddressNotAllowed, uri.Host);
+                return false;
             }
 
             return true;
@@ -88,7 +88,51 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Channels
         public bool IsAddressAllowed(IPAddress address)
         {
             EnsureArg.IsNotNull(address, nameof(address));
-            return _configuration.AllowPrivateNetworkEndpoints || !IsNonPublic(address);
+
+            IPAddress normalized = Normalize(address);
+            if (IsNeverAllowed(normalized))
+            {
+                return false;
+            }
+
+            return !IsNonPublic(normalized) || _allowedPrivateNetworks.Any(n => n.Contains(normalized));
+        }
+
+        /// <summary>
+        /// Returns true for addresses that are never allowed, even when listed in
+        /// <see cref="SubscriptionsConfiguration.AllowedPrivateNetworks"/>: unspecified and "this network", link-local (including
+        /// cloud metadata endpoints), the Azure platform address, IETF protocol assignments, benchmarking, multicast, reserved and
+        /// local-use NAT64 addresses.
+        /// </summary>
+        /// <param name="address">The address.</param>
+        /// <returns>Whether the address is never allowed.</returns>
+        public static bool IsNeverAllowed(IPAddress address)
+        {
+            EnsureArg.IsNotNull(address, nameof(address));
+
+            address = Normalize(address);
+            if (IPAddress.IsLoopback(address))
+            {
+                return false;
+            }
+
+            byte[] b = address.GetAddressBytes();
+            if (address.AddressFamily == AddressFamily.InterNetwork)
+            {
+                return b[0] == 0 // "this" network
+                    || (b[0] == 169 && b[1] == 254) // link-local, including cloud metadata endpoints
+                    || (b[0] == 168 && b[1] == 63 && b[2] == 129 && b[3] == 16) // Azure platform (WireServer, DNS, health probes)
+                    || (b[0] == 192 && b[1] == 0 && b[2] == 0) // IETF protocol assignments
+                    || (b[0] == 198 && (b[1] == 18 || b[1] == 19)) // benchmarking
+                    || b[0] >= 224; // multicast and reserved
+            }
+
+            return address.AddressFamily != AddressFamily.InterNetworkV6
+                || address.Equals(IPAddress.IPv6None)
+                || address.IsIPv6LinkLocal
+                || address.IsIPv6SiteLocal
+                || address.IsIPv6Multicast
+                || (b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xFF && b[3] == 0x9B && b[4] == 0x00 && b[5] == 0x01); // local-use NAT64 64:ff9b:1::/48
         }
 
         /// <summary>
@@ -123,6 +167,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Channels
                     || (b[0] == 100 && b[1] >= 64 && b[1] <= 127) // carrier-grade NAT
                     || b[0] == 127 // loopback
                     || (b[0] == 169 && b[1] == 254) // link-local, including cloud metadata endpoints
+                    || (b[0] == 168 && b[1] == 63 && b[2] == 129 && b[3] == 16) // Azure platform (WireServer, DNS, health probes)
                     || (b[0] == 172 && b[1] >= 16 && b[1] <= 31) // private
                     || (b[0] == 192 && b[1] == 0 && b[2] == 0) // IETF protocol assignments
                     || (b[0] == 192 && b[1] == 168) // private
@@ -142,6 +187,28 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Channels
             }
 
             return true;
+        }
+
+        // Reduces IPv6 forms that are delivered to an IPv4 address to that address, so one rule covers both.
+        // ::1 stays IPv6 loopback.
+        private static IPAddress Normalize(IPAddress address)
+        {
+            if (address.IsIPv4MappedToIPv6)
+            {
+                return address.MapToIPv4();
+            }
+
+            return !IPAddress.IsLoopback(address) && TryGetEmbeddedIPv4(address, out IPAddress embedded) ? embedded : address;
+        }
+
+        private static IPNetwork ParseNetwork(string value)
+        {
+            if (!IPNetwork.TryParse(value?.Trim(), out IPNetwork network))
+            {
+                throw new InvalidOperationException(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionAllowedPrivateNetworkInvalid, value));
+            }
+
+            return network;
         }
 
         // IPv6 forms that carry an IPv4 address: IPv4-compatible ::/96 (which includes :: and ::1), the NAT64 well-known

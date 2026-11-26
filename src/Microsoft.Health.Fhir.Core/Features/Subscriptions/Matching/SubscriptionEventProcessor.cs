@@ -138,7 +138,14 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Matching
                     }
 
                     // Authorize before the event is numbered, so events the subscriber may not see leave no gap (R5 3.9.8).
-                    return _authorizer.IsAuthorized(subscription.Grant, target) ? SubscriptionEventStatus.Pending : null;
+                    // When the match depends on the previous version, the event also discloses something about it.
+                    if (!_authorizer.IsAuthorized(subscription.Grant, target) ||
+                        (SubscriptionMatcher.DependsOnPrevious(subscription.Topic, change) && change.Previous != null && !_authorizer.IsAuthorized(subscription.Grant, change.Previous)))
+                    {
+                        return null;
+                    }
+
+                    return SubscriptionEventStatus.Pending;
 
                 case MatchOutcome.Unevaluable:
                     return UnevaluableIfTypeAuthorized(subscription, change);

@@ -166,6 +166,28 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             Assert.Equal(102, Assert.Single(events).Change.TransactionId);
         }
 
+        [Theory]
+        [InlineData("%previous.subject.exists()", "p2", false)] // the match reads a version outside the compartment
+        [InlineData("%previous.subject.exists()", "p1", true)]
+        [InlineData(null, "p2", true)] // the match reads only the current version, so moving into the compartment still notifies
+        public void GivenACompartmentGrant_WhenAnUpdateMatchDependsOnThePreviousVersion_ThenThatVersionMustAlsoBeAuthorized(string fhirPath, string previousPatient, bool expected)
+        {
+            // Arrange
+            var grant = new SubscriptionGrant { ContentHash = "h", CompartmentResourceType = "Patient", CompartmentId = "p1" };
+            RegisteredSubscription subscription = Subscription("s1", grant: grant, fhirPath: fhirPath);
+            Observation previous = InMemorySearchEvaluatorTests.CreateObservation();
+            previous.Subject = new ResourceReference("Patient/" + previousPatient);
+            previous.Meta = new Meta { VersionId = "1" };
+            Observation current = InMemorySearchEvaluatorTests.CreateObservation();
+            current.Subject = new ResourceReference("Patient/p1");
+
+            // Act
+            IReadOnlyList<SubscriptionEventCandidate> events = _processor.Process([SubscriptionTestFixture.Change(current, previous, transactionId: 101)], [subscription]);
+
+            // Assert
+            Assert.Equal(expected, events.Count == 1);
+        }
+
         [Fact]
         public void GivenAnUnevaluableChange_WhenTheGrantIsUnrestricted_ThenAnUnevaluableEventIsRecorded()
         {

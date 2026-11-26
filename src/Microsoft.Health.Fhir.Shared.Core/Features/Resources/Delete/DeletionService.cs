@@ -33,6 +33,7 @@ using Microsoft.Health.Fhir.Core.Features.Search;
 using Microsoft.Health.Fhir.Core.Features.Search.Parameters;
 using Microsoft.Health.Fhir.Core.Features.Security;
 using Microsoft.Health.Fhir.Core.Features.Security.Authorization;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Validation;
 using Microsoft.Health.Fhir.Core.Messages.Delete;
 using Microsoft.Health.Fhir.Core.Models;
@@ -60,6 +61,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Persistence
         private readonly IResourceDeserializer _resourceDeserializer;
         private readonly IProvideProfilesForValidation _profilesProvider;
         private readonly IAuthorizationService<DataActions> _authorizationService;
+        private readonly ISubscriptionStore _subscriptionStore;
         private readonly ILogger<DeletionService> _logger;
         private readonly SemaphoreSlim _searchParamDeleteSemaphore;
         private bool _disposed;
@@ -81,6 +83,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Persistence
             IResourceDeserializer resourceDeserializer,
             IProvideProfilesForValidation profilesProvider,
             IAuthorizationService<DataActions> authorizationService,
+            ISubscriptionStore subscriptionStore,
             ILogger<DeletionService> logger)
         {
             _resourceWrapperFactory = EnsureArg.IsNotNull(resourceWrapperFactory, nameof(resourceWrapperFactory));
@@ -97,6 +100,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Persistence
             _resourceDeserializer = EnsureArg.IsNotNull(resourceDeserializer, nameof(resourceDeserializer));
             _profilesProvider = EnsureArg.IsNotNull(profilesProvider, nameof(profilesProvider));
             _authorizationService = EnsureArg.IsNotNull(authorizationService, nameof(authorizationService));
+            _subscriptionStore = EnsureArg.IsNotNull(subscriptionStore, nameof(subscriptionStore));
             _searchParamDeleteSemaphore = new SemaphoreSlim(1, 1);
 
             _retryPolicy = Policy
@@ -529,6 +533,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Persistence
         {
             var guid = Guid.NewGuid();
             _logger.LogInformation("Soft deleting {Count} resources with request {RequestId}", resourcesToDelete.Count, guid);
+            await RemoveSubscriptionStatesAsync(request.DeleteOperation, resourcesToDelete, cancellationToken);
 
             await CreateAuditLog(
                 request.ResourceType,
@@ -618,10 +623,27 @@ namespace Microsoft.Health.Fhir.Core.Features.Persistence
             return results;
         }
 
+        private async Task RemoveSubscriptionStatesAsync(DeleteOperation deleteOperation, IReadOnlyCollection<SearchResultEntry> resourcesToDelete, CancellationToken cancellationToken)
+        {
+            // Deleting many resources bypasses the request pipeline that removes a deleted subscription's grant and activation state (ADR-2611).
+            // The state is removed before the resource, so a failed delete leaves a subscription without a grant, which stops, rather than
+            // a grant that a subscription recreated with the same id could reuse. $purge-history keeps the current version and its state.
+            if (deleteOperation == DeleteOperation.PurgeHistory || _subscriptionStore.Availability != SubscriptionStoreAvailability.Available)
+            {
+                return;
+            }
+
+            foreach (SearchResultEntry item in resourcesToDelete.Where(r => string.Equals(r.Resource.ResourceTypeName, KnownResourceTypes.Subscription, StringComparison.Ordinal)))
+            {
+                await _subscriptionStore.DeleteStateAsync(item.Resource.ResourceId, cancellationToken);
+            }
+        }
+
         private async Task<Dictionary<string, long>> HardDeleteResourcePage(ConditionalDeleteResourceRequest request, IReadOnlyCollection<SearchResultEntry> resourcesToDelete, CancellationToken cancellationToken)
         {
             var guid = Guid.NewGuid();
             _logger.LogInformation("Hard deleting {Count} resources with request {RequestId}", resourcesToDelete.Count, guid);
+            await RemoveSubscriptionStatesAsync(request.DeleteOperation, resourcesToDelete, cancellationToken);
 
             await CreateAuditLog(
                 request.ResourceType,

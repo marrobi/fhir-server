@@ -20,7 +20,9 @@ services:
       DataStore: "SqlServer"
       FhirServer__Subscriptions__Enabled: "true"
       FhirServer__Subscriptions__AllowHttpEndpoints: "true"
-      FhirServer__Subscriptions__AllowPrivateNetworkEndpoints: "true"
+      # The webhook container is on the Compose network, which Docker assigns from one of these private ranges.
+      FhirServer__Subscriptions__AllowedPrivateNetworks__0: "172.16.0.0/12"
+      FhirServer__Subscriptions__AllowedPrivateNetworks__1: "192.168.0.0/16"
       FhirServer__Subscriptions__RegistryRefreshIntervalSeconds: "2"
       FhirServer__Subscriptions__RetryBaseDelaySeconds: "1"
       FhirServer__Subscriptions__MaxDeliveryAttempts: "2"

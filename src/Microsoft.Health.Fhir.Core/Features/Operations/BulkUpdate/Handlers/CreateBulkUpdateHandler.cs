@@ -27,6 +27,7 @@ using Microsoft.Health.Fhir.Core.Features.Resources.Patch;
 using Microsoft.Health.Fhir.Core.Features.Search;
 using Microsoft.Health.Fhir.Core.Features.Security;
 using Microsoft.Health.Fhir.Core.Features.Security.Authorization;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions;
 using Microsoft.Health.Fhir.Core.Models;
 using Microsoft.Health.JobManagement;
 
@@ -49,6 +50,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Operations.BulkUpdate.Handlers
         private readonly List<string> _bulkUpdateSupportedOperations = new() { "Upsert", "Replace" };
         private readonly IResourceSerializer _resourceSerializer;
         private readonly CoreFeatureConfiguration _coreFeatures;
+        private readonly ISubscriptionModelConverter _subscriptionModelConverter;
+        private readonly SubscriptionsConfiguration _subscriptionsConfiguration;
 
         public CreateBulkUpdateHandler(
             IAuthorizationService<DataActions> authorizationService,
@@ -57,7 +60,9 @@ namespace Microsoft.Health.Fhir.Core.Features.Operations.BulkUpdate.Handlers
             ISearchService searchService,
             IResourceSerializer resourceSerializer,
             ILogger<CreateBulkUpdateHandler> logger,
-            IOptions<CoreFeatureConfiguration> coreFeatures)
+            IOptions<CoreFeatureConfiguration> coreFeatures,
+            ISubscriptionModelConverter subscriptionModelConverter,
+            IOptions<SubscriptionsConfiguration> subscriptionsConfiguration)
         {
             _authorizationService = EnsureArg.IsNotNull(authorizationService, nameof(authorizationService));
             _queueClient = EnsureArg.IsNotNull(queueClient, nameof(queueClient));
@@ -66,6 +71,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Operations.BulkUpdate.Handlers
             _resourceSerializer = EnsureArg.IsNotNull(resourceSerializer, nameof(resourceSerializer));
             _logger = EnsureArg.IsNotNull(logger, nameof(logger));
             _coreFeatures = EnsureArg.IsNotNull(coreFeatures?.Value, nameof(coreFeatures));
+            _subscriptionModelConverter = EnsureArg.IsNotNull(subscriptionModelConverter, nameof(subscriptionModelConverter));
+            _subscriptionsConfiguration = EnsureArg.IsNotNull(subscriptionsConfiguration?.Value, nameof(subscriptionsConfiguration));
         }
 
         public async Task<CreateBulkUpdateResponse> HandleAsync(CreateBulkUpdateRequest request, CancellationToken cancellationToken)
@@ -87,6 +94,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Operations.BulkUpdate.Handlers
             {
                 throw new BadRequestException($"Bulk update is not supported for resource type {request.ResourceType}.");
             }
+
+            await CheckSubscriptionTopicAccessAsync(request, cancellationToken);
 
             var searchParameters = new List<Tuple<string, string>>(); // remove read only restriction
             if (request.ConditionalParameters != null && request.ConditionalParameters.Any())
@@ -163,6 +172,27 @@ namespace Microsoft.Health.Fhir.Core.Features.Operations.BulkUpdate.Handlers
             }
 
             return new CreateBulkUpdateResponse(jobInfo[0].Id);
+        }
+
+        private async Task CheckSubscriptionTopicAccessAsync(CreateBulkUpdateRequest request, CancellationToken cancellationToken)
+        {
+            if (!_subscriptionsConfiguration.Enabled || !_subscriptionModelConverter.IsSupported)
+            {
+                return;
+            }
+
+            // Bulk update writes straight to the data store, so the topic permission checked on API writes (ADR-2611) is checked here
+            // whenever the job may reach topics: the topic resource type itself (every Basic on R4), any type, or included resources.
+            bool mayTouchTopics = string.IsNullOrEmpty(request.ResourceType)
+                || string.Equals(request.ResourceType, _subscriptionModelConverter.TopicResourceType, StringComparison.Ordinal)
+                || (request.ConditionalParameters?.Any(p =>
+                    p.Item1.StartsWith(SearchParameterNames.Include, StringComparison.Ordinal) ||
+                    p.Item1.StartsWith(KnownQueryParameterNames.ReverseInclude, StringComparison.Ordinal)) ?? false);
+
+            if (mayTouchTopics)
+            {
+                await _authorizationService.CheckAccess(DataActions.SubscriptionTopic, throwException: true, cancellationToken);
+            }
         }
     }
 }

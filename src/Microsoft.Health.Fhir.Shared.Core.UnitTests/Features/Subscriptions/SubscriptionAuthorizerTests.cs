@@ -115,6 +115,27 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             Assert.False(_fixture.CreateAuthorizer().CanRead(grant, "Observation"));
         }
 
+        [Theory]
+        [InlineData(DataActions.ReadById, false)] // SMART v2 ".r": read by id only, no search
+        [InlineData(DataActions.Search, true)]
+        [InlineData(DataActions.ReadById | DataActions.Search, true)]
+        [InlineData(DataActions.Read, true)]
+        public void GivenAReadPermission_WhenAuthorizing_ThenSearchIsRequiredBecauseASubscriptionActsAsASearch(DataActions actions, bool expected)
+        {
+            // Arrange
+            var smart = new SubscriptionGrant { Smart = true, Scopes = [new SubscriptionGrantScope { Resource = "Observation", DataActions = actions }] };
+            var roles = new SubscriptionGrant { SecurityEnabled = true, RoleAuthorizationEnabled = true, Roles = ["subscriber"] };
+            ResourceSnapshot observation = SubscriptionTestFixture.Snapshot(InMemorySearchEvaluatorTests.CreateObservation());
+            SubscriptionAuthorizer smartAuthorizer = _fixture.CreateAuthorizer();
+            SubscriptionAuthorizer roleAuthorizer = _fixture.CreateAuthorizer(Security(new Role("subscriber", actions, "/")));
+
+            // Act and assert
+            Assert.Equal(expected, smartAuthorizer.CanRead(smart, "Observation"));
+            Assert.Equal(expected, smartAuthorizer.IsAuthorized(smart, observation));
+            Assert.Equal(expected, roleAuthorizer.CanRead(roles, "Observation"));
+            Assert.Equal(expected, roleAuthorizer.IsAuthorized(roles, observation));
+        }
+
         [Fact]
         public void GivenAFineGrainedSmartScope_WhenAuthorizing_ThenItsSearchRestrictionIsEvaluated()
         {

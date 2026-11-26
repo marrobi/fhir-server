@@ -29,6 +29,8 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         [InlineData("https://172.16.0.1/hook", false)]
         [InlineData("https://192.168.1.1/hook", false)]
         [InlineData("https://169.254.169.254/metadata", false)]
+        [InlineData("https://168.63.129.16/machine", false)]
+        [InlineData("https://168.63.129.17/hook", true)]
         [InlineData("https://100.64.0.1/hook", false)]
         [InlineData("https://[::1]/hook", false)]
         [InlineData("https://[fd00::1]/hook", false)]
@@ -45,13 +47,54 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             Assert.Equal(expected, error == null);
         }
 
-        [Fact]
-        public void GivenDevelopmentSettings_WhenValidatingALocalHttpEndpoint_ThenItIsAllowed()
+        [Theory]
+        [InlineData("10.20.1.5", true)] // inside the listed range
+        [InlineData("10.21.0.1", false)] // private, but not listed
+        [InlineData("192.168.1.1", false)]
+        [InlineData("::ffff:10.20.1.5", true)] // IPv4-mapped form of a listed address
+        [InlineData("2002:0a14:0105::1", true)] // 6to4 of 10.20.1.5
+        [InlineData("fd00:1::5", true)]
+        [InlineData("127.0.0.1", true)]
+        [InlineData("::1", false)] // IPv6 loopback is not covered by 127.0.0.0/8
+        [InlineData("8.8.8.8", true)] // public addresses stay allowed
+        public void GivenAllowedPrivateNetworks_WhenCheckingAnAddress_ThenOnlyListedPrivateRangesAreAllowed(string address, bool expected)
         {
-            var policy = new SubscriptionEndpointPolicy(Options.Create(new SubscriptionsConfiguration { AllowHttpEndpoints = true, AllowPrivateNetworkEndpoints = true }));
+            SubscriptionEndpointPolicy policy = PolicyAllowing("10.20.0.0/16", "fd00:1::/64", "127.0.0.0/8");
 
-            Assert.True(policy.TryValidate("http://webhook:8080/notify", out _));
-            Assert.True(policy.IsAddressAllowed(IPAddress.Loopback));
+            Assert.Equal(expected, policy.IsAddressAllowed(IPAddress.Parse(address)));
+        }
+
+        [Theory]
+        [InlineData("169.254.169.254")] // cloud metadata
+        [InlineData("168.63.129.16")] // Azure platform
+        [InlineData("fe80::1")] // IPv6 link-local
+        [InlineData("::ffff:169.254.169.254")]
+        [InlineData("64:ff9b::a9fe:a9fe")] // NAT64 of 169.254.169.254
+        [InlineData("0.0.0.0")]
+        [InlineData("224.0.0.1")]
+        public void GivenAllowedPrivateNetworksCoveringEverything_WhenCheckingAProtectedAddress_ThenItIsStillBlocked(string address)
+        {
+            SubscriptionEndpointPolicy policy = PolicyAllowing("0.0.0.0/0", "::/0");
+
+            Assert.False(policy.IsAddressAllowed(IPAddress.Parse(address)));
+            Assert.False(policy.TryValidate($"https://{(address.Contains(':', System.StringComparison.Ordinal) ? $"[{address}]" : address)}/hook", out _));
+        }
+
+        [Theory]
+        [InlineData("127.0.0.0/8", true)]
+        [InlineData("::1/128", true)]
+        [InlineData("10.0.0.0/8", false)]
+        public void GivenALocalhostEndpoint_WhenValidating_ThenItIsAllowedOnlyWhenLoopbackIsListed(string network, bool expected)
+        {
+            Assert.Equal(expected, PolicyAllowing(network).TryValidate("https://localhost/hook", out _));
+        }
+
+        [Fact]
+        public void GivenAnInvalidAllowedPrivateNetwork_WhenThePolicyIsCreated_ThenItFailsWithTheValue()
+        {
+            System.InvalidOperationException ex = Assert.Throws<System.InvalidOperationException>(() => PolicyAllowing("10.0.0.0/33"));
+
+            Assert.Contains("10.0.0.0/33", ex.Message, System.StringComparison.Ordinal);
         }
 
         [Theory]
@@ -85,6 +128,17 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         public void GivenAnAddress_WhenCheckingIfNonPublic_ThenReservedRangesAreDetected(string address, bool expected)
         {
             Assert.Equal(expected, SubscriptionEndpointPolicy.IsNonPublic(IPAddress.Parse(address)));
+        }
+
+        private static SubscriptionEndpointPolicy PolicyAllowing(params string[] networks)
+        {
+            var configuration = new SubscriptionsConfiguration();
+            foreach (string network in networks)
+            {
+                configuration.AllowedPrivateNetworks.Add(network);
+            }
+
+            return new SubscriptionEndpointPolicy(Options.Create(configuration));
         }
     }
 }

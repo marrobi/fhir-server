@@ -161,7 +161,10 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
 
             DeleteResourceResponse response = await next();
 
-            if (string.Equals(resourceType, KnownResourceTypes.Subscription, StringComparison.Ordinal) && _store.Availability == SubscriptionStoreAvailability.Available)
+            // $purge-history keeps the current version, so the subscription and its state remain.
+            if (string.Equals(resourceType, KnownResourceTypes.Subscription, StringComparison.Ordinal) &&
+                request.DeleteOperation != DeleteOperation.PurgeHistory &&
+                _store.Availability == SubscriptionStoreAvailability.Available)
             {
                 await _store.DeleteStateAsync(request.ResourceKey.Id, cancellationToken);
                 _registry.Invalidate();
@@ -227,6 +230,11 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             }
 
             SubscriptionInfo existingInfo = TryConvert(existing);
+
+            // Writes that leave the content unchanged keep the grant of the identity that last set the content, unless the same identity
+            // renews it. Otherwise a routine write by a more privileged identity would widen what an existing endpoint receives.
+            SubscriptionGrant effectiveGrant = await GetRetainedGrantAsync(existing?.Id, contentHash, grant.Subject, cancellationToken) ?? grant;
+
             SubscriptionStatusCode status = DecideStatus(info, existingInfo, contentHash);
             if (status.IsLive() && (existingInfo == null || !existingInfo.Status.IsLive()))
             {
@@ -234,14 +242,14 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
                 await EnsureCapacityAsync(cancellationToken);
             }
 
-            _converter.ApplyServerValues(resource, status, CapEnd(info.End));
+            _converter.ApplyServerValues(resource, status, CapEnd(info.End, effectiveGrant.CreatedUtc));
 
             UpsertResourceResponse response = await next();
 
             string id = response.Outcome.RawResourceElement.Id;
             if (status.IsLive())
             {
-                await _store.SaveGrantAsync(id, contentHash, grant.Serialize(), cancellationToken);
+                await _store.SaveGrantAsync(id, contentHash, effectiveGrant.Serialize(), cancellationToken);
             }
             else
             {
@@ -274,14 +282,32 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             return SubscriptionStatusCode.Requested;
         }
 
-        private DateTimeOffset? CapEnd(DateTimeOffset? end)
+        private async Task<SubscriptionGrant> GetRetainedGrantAsync(string id, string contentHash, string callerSubject, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrEmpty(id))
+            {
+                return null;
+            }
+
+            SubscriptionState state = await _store.GetStateAsync(id, cancellationToken);
+            if (string.IsNullOrEmpty(state?.Grant) || !string.Equals(state.ContentHash, contentHash, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            SubscriptionGrant stored = SubscriptionGrant.Deserialize(state.Grant);
+            return string.Equals(stored.Subject, callerSubject, StringComparison.Ordinal) ? null : stored;
+        }
+
+        private DateTimeOffset? CapEnd(DateTimeOffset? end, DateTimeOffset grantCreatedUtc)
         {
             if (_configuration.MaxLifetimeDays <= 0)
             {
                 return null;
             }
 
-            DateTimeOffset max = Clock.UtcNow.AddDays(_configuration.MaxLifetimeDays);
+            // The lifetime counts from when the grant was captured, so a write that keeps an older grant cannot extend it.
+            DateTimeOffset max = grantCreatedUtc.AddDays(_configuration.MaxLifetimeDays);
             return end == null || end > max ? max : null;
         }
 

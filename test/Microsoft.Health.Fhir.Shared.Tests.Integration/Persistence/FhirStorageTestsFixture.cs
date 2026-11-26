@@ -48,6 +48,7 @@ using Microsoft.Health.Fhir.Core.Features.Search.Parameters;
 using Microsoft.Health.Fhir.Core.Features.Search.Registry;
 using Microsoft.Health.Fhir.Core.Features.Search.SearchValues;
 using Microsoft.Health.Fhir.Core.Features.Security.Authorization;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Validation;
 using Microsoft.Health.Fhir.Core.Messages.Create;
 using Microsoft.Health.Fhir.Core.Messages.Delete;
@@ -372,6 +373,7 @@ namespace Microsoft.Health.Fhir.Tests.Integration.Persistence
                 Deserializer,
                 profilesProvider,
                 DisabledFhirAuthorizationService.Instance,
+                new UnsupportedSubscriptionStore(),
                 logger);
 
             var collection = new ServiceCollection();

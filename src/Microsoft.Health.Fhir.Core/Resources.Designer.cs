@@ -2700,6 +2700,15 @@ namespace Microsoft.Health.Fhir.Core {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to FhirServer:Subscriptions:AllowedPrivateNetworks contains &#x27;{0}&#x27;, which is not a valid CIDR range such as 10.20.0.0/16..
+        /// </summary>
+        internal static string SubscriptionAllowedPrivateNetworkInvalid {
+            get {
+                return ResourceManager.GetString("SubscriptionAllowedPrivateNetworkInvalid", resourceCulture);
+            }
+        }
+
+        /// <summary>
         ///   Looks up a localized string similar to The subscription endpoint &#x27;{0}&#x27; resolves to an address that is not allowed (loopback, private, link-local or otherwise non-public)..
         /// </summary>
         internal static string SubscriptionEndpointAddressNotAllowed {

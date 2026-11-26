@@ -43,6 +43,7 @@ using Microsoft.Health.Fhir.Core.Features.Resources.Delete;
 using Microsoft.Health.Fhir.Core.Features.Search;
 using Microsoft.Health.Fhir.Core.Features.Search.Parameters;
 using Microsoft.Health.Fhir.Core.Features.Security;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Validation;
 using Microsoft.Health.Fhir.Core.Messages.Delete;
 using Microsoft.Health.Fhir.Core.Models;
@@ -160,6 +161,7 @@ namespace Microsoft.Health.Fhir.Api.UnitTests.Features.Filters
                         Substitute.For<IResourceDeserializer>(),
                         Substitute.For<IProvideProfilesForValidation>(),
                         authorizationService,
+                        new UnsupportedSubscriptionStore(),
                         _deleteLogger));
                     services.AddSingleton(provider => new ConditionalDeleteResourceHandler(
                         dataStore,

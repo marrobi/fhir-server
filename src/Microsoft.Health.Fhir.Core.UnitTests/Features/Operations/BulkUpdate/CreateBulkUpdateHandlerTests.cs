@@ -24,6 +24,7 @@ using Microsoft.Health.Fhir.Core.Features.Operations.BulkUpdate.Messages;
 using Microsoft.Health.Fhir.Core.Features.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Search;
 using Microsoft.Health.Fhir.Core.Features.Security;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions;
 using Microsoft.Health.Fhir.Core.Models;
 using Microsoft.Health.Fhir.Tests.Common;
 using Microsoft.Health.JobManagement;
@@ -44,6 +45,8 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Operations.BulkUpdate
         private readonly IQueueClient _queueClient;
         private readonly RequestContextAccessor<IFhirRequestContext> _contextAccessor;
         private readonly ISearchService _searchService;
+        private readonly ISubscriptionModelConverter _subscriptionModelConverter = Substitute.For<ISubscriptionModelConverter>();
+        private readonly SubscriptionsConfiguration _subscriptionsConfiguration = new();
         private readonly CreateBulkUpdateHandler _handler;
         private readonly string _testUrl = "https://test.com/";
 
@@ -69,7 +72,9 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Operations.BulkUpdate
                 _searchService,
                 Substitute.For<IResourceSerializer>(),
                 Substitute.For<ILogger<CreateBulkUpdateHandler>>(),
-                Options.Create(new CoreFeatureConfiguration { EnableSmartBulkUpdateRestriction = true }));
+                Options.Create(new CoreFeatureConfiguration { EnableSmartBulkUpdateRestriction = true }),
+                _subscriptionModelConverter,
+                Options.Create(_subscriptionsConfiguration));
         }
 
         [Theory]
@@ -216,7 +221,9 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Operations.BulkUpdate
                 _searchService,
                 Substitute.For<IResourceSerializer>(),
                 Substitute.For<ILogger<CreateBulkUpdateHandler>>(),
-                Options.Create(new CoreFeatureConfiguration { EnableSmartBulkUpdateRestriction = false }));
+                Options.Create(new CoreFeatureConfiguration { EnableSmartBulkUpdateRestriction = false }),
+                _subscriptionModelConverter,
+                Options.Create(_subscriptionsConfiguration));
 
             var request = new CreateBulkUpdateRequest(KnownResourceTypes.Patient, new List<Tuple<string, string>>(), GenerateParameters("replace"), false);
 
@@ -403,6 +410,55 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Operations.BulkUpdate
 
             var request = new CreateBulkUpdateRequest(KnownResourceTypes.Patient, searchParams, parameters, false);
             await Assert.ThrowsAsync<BadRequestException>(async () => await _handler.HandleAsync(request, CancellationToken.None));
+        }
+
+        [Theory]
+        [InlineData(KnownResourceTypes.Basic, null, null, true)] // the topic resource type: every Basic on R4
+        [InlineData(null, null, null, true)] // any resource type
+        [InlineData(KnownResourceTypes.Patient, "_revinclude", "Basic:subject", true)]
+        [InlineData(KnownResourceTypes.Patient, "_include:iterate", "Patient:link", true)]
+        [InlineData(KnownResourceTypes.Patient, "name", "x", false)]
+        public async Task GivenSubscriptionsEnabled_WhenABulkUpdateMayReachTopics_ThenTheSubscriptionTopicPermissionIsRequired(string resourceType, string parameter, string value, bool mayReachTopics)
+        {
+            // The caller is a bulk operator without the subscriptionTopic permission.
+            _subscriptionsConfiguration.Enabled = true;
+            _subscriptionModelConverter.IsSupported.Returns(true);
+            _subscriptionModelConverter.TopicResourceType.Returns(KnownResourceTypes.Basic);
+            _authorizationService.CheckAccess(Arg.Any<DataActions>(), Arg.Any<CancellationToken>()).Returns(DataActions.BulkOperator);
+            _contextAccessor.RequestContext.BundleIssues.Clear();
+            _queueClient.EnqueueAsync((byte)QueueType.BulkUpdate, Arg.Any<string[]>(), Arg.Any<long?>(), true, Arg.Any<CancellationToken>())
+                .Returns(new List<JobInfo> { new() { Id = 1 } });
+            var searchParams = parameter == null ? new List<Tuple<string, string>>() : new List<Tuple<string, string>> { Tuple.Create(parameter, value) };
+            var request = new CreateBulkUpdateRequest(resourceType, searchParams, GenerateParameters("replace"), false);
+
+            if (mayReachTopics)
+            {
+                await Assert.ThrowsAsync<UnauthorizedFhirActionException>(() => _handler.HandleAsync(request, CancellationToken.None));
+            }
+            else
+            {
+                Assert.Equal(1, (await _handler.HandleAsync(request, CancellationToken.None)).Id);
+            }
+        }
+
+        [Theory]
+        [InlineData(true, DataActions.BulkOperator | DataActions.SubscriptionTopic)] // enabled, with the permission
+        [InlineData(false, DataActions.BulkOperator)] // disabled: topics are inert
+        public async Task GivenABulkUpdateOfTheTopicResourceType_WhenThePermissionIsHeldOrSubscriptionsAreDisabled_ThenTheJobIsCreated(bool enabled, DataActions granted)
+        {
+            _subscriptionsConfiguration.Enabled = enabled;
+            _subscriptionModelConverter.IsSupported.Returns(true);
+            _subscriptionModelConverter.TopicResourceType.Returns(KnownResourceTypes.Basic);
+            _authorizationService.CheckAccess(Arg.Any<DataActions>(), Arg.Any<CancellationToken>()).Returns(granted);
+            _contextAccessor.RequestContext.BundleIssues.Clear();
+            _queueClient.EnqueueAsync((byte)QueueType.BulkUpdate, Arg.Any<string[]>(), Arg.Any<long?>(), true, Arg.Any<CancellationToken>())
+                .Returns(new List<JobInfo> { new() { Id = 1 } });
+
+            CreateBulkUpdateResponse response = await _handler.HandleAsync(
+                new CreateBulkUpdateRequest(KnownResourceTypes.Basic, new List<Tuple<string, string>>(), GenerateParameters("replace"), false),
+                CancellationToken.None);
+
+            Assert.Equal(1, response.Id);
         }
 
         [Fact]
