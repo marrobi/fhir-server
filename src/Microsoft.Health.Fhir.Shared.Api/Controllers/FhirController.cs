@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Net;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using EnsureThat;
 using Hl7.Fhir.Model;
@@ -68,6 +69,8 @@ namespace Microsoft.Health.Fhir.Api.Controllers
     [ValidateModelState]
     public class FhirController : Controller
     {
+        private static readonly ConditionalWeakTable<ResourceElement, ResourceElement> MetadataPocos = new();
+
         private readonly IMediator _mediator;
         private readonly RequestContextAccessor<IFhirRequestContext> _fhirRequestContextAccessor;
         private readonly IUrlResolver _urlResolver;
@@ -745,6 +748,10 @@ namespace Microsoft.Health.Fhir.Api.Controllers
         public async Task<IActionResult> Metadata()
         {
             ResourceElement response = await _mediator.GetCapabilitiesAsync(HttpContext.RequestAborted);
+
+            // The provider returns the same cached element until the statement is rebuilt; converting it to a POCO is the costly part of
+            // serializing it, so the converted statement is kept with it. Serialization only reads the POCO.
+            response = MetadataPocos.GetValue(response, r => r.ToPoco().ToResourceElement());
 
             return FhirResult.Create(_logger, response);
         }

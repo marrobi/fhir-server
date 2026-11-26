@@ -10,6 +10,7 @@ using System.Net;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using Hl7.Fhir.ElementModel;
 using Hl7.Fhir.Model;
 using Hl7.Fhir.Serialization;
 using Medino;
@@ -1179,6 +1180,28 @@ namespace Microsoft.Health.Fhir.Api.UnitTests.Controllers
             await _mediator.Received(1).SendAsync<GetCapabilitiesResponse>(
                 Arg.Any<GetCapabilitiesRequest>(),
                 Arg.Any<CancellationToken>());
+        }
+
+        [Fact]
+        public async Task GivenTheCachedCapabilityStatement_WhenMetadataIsRequestedRepeatedly_ThenItIsConvertedOnceUntilItIsRebuilt()
+        {
+            // Arrange
+            _fhirController.ControllerContext.HttpContext = new DefaultHttpContext();
+            ResourceElement cached = new CapabilityStatement { Id = "first" }.ToTypedElement().ToResourceElement();
+            ResourceElement rebuilt = new CapabilityStatement { Id = "second" }.ToTypedElement().ToResourceElement();
+            _mediator.SendAsync<GetCapabilitiesResponse>(Arg.Any<GetCapabilitiesRequest>(), Arg.Any<CancellationToken>())
+                .Returns(new GetCapabilitiesResponse(cached), new GetCapabilitiesResponse(cached), new GetCapabilitiesResponse(rebuilt));
+
+            // Act
+            var first = Assert.IsType<FhirResult>(await _fhirController.Metadata());
+            var second = Assert.IsType<FhirResult>(await _fhirController.Metadata());
+            var third = Assert.IsType<FhirResult>(await _fhirController.Metadata());
+
+            // Assert
+            Assert.Same(first.Result, second.Result);
+            Assert.Equal("first", first.Result.Id);
+            Assert.NotSame(first.Result, third.Result);
+            Assert.Equal("second", third.Result.Id);
         }
 
         [Fact]
