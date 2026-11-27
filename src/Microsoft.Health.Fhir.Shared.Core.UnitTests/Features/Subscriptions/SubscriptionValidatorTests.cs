@@ -116,6 +116,18 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             Assert.NotEmpty(_validator.ValidateSubscription(ValidSubscription(), Copy(ValidTopic(), status: "retired")));
         }
 
+        [Theory]
+        [InlineData(SubscriptionStatusCode.Off)]
+        [InlineData(SubscriptionStatusCode.EnteredInError)]
+        public void GivenAMissingRetiredOrInvalidTopic_WhenAStoppedSubscriptionIsValidated_ThenItIsAccepted(SubscriptionStatusCode status)
+        {
+            SubscriptionInfo subscription = With(status: status);
+
+            Assert.Empty(_validator.ValidateSubscription(subscription, null));
+            Assert.Empty(_validator.ValidateSubscription(subscription, Copy(ValidTopic(), status: "retired")));
+            Assert.Empty(_validator.ValidateSubscription(subscription, Copy(ValidTopic(), hasEventTriggers: true)));
+        }
+
         public static IEnumerable<object[]> InvalidSubscriptions()
         {
             yield return [With(channelType: "websocket")];
@@ -138,6 +150,27 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         public void GivenASubscriptionTheServerCannotHonor_WhenValidated_ThenItIsRejected(SubscriptionInfo subscription)
         {
             Assert.NotEmpty(_validator.ValidateSubscription(subscription, ValidTopic()));
+        }
+
+        [Theory]
+        [InlineData(SubscriptionStatusCode.Off, true)]
+        [InlineData(SubscriptionStatusCode.EnteredInError, true)]
+        [InlineData(SubscriptionStatusCode.Requested, false)]
+        [InlineData(SubscriptionStatusCode.Active, false)]
+        [InlineData(SubscriptionStatusCode.Error, false)]
+        public void GivenAnEndpointHostNotInTheAllowList_WhenValidated_ThenOnlyAStoppedSubscriptionIsAccepted(SubscriptionStatusCode status, bool accepted)
+        {
+            // Arrange: the allow-list was tightened after the subscription was written.
+            var configuration = new SubscriptionsConfiguration();
+            configuration.AllowedEndpointHosts.Add("hooks.partner.org");
+            SubscriptionValidator validator = _fixture.CreateValidator(configuration);
+            SubscriptionInfo subscription = With(status: status);
+
+            // Act
+            IReadOnlyList<string> errors = validator.ValidateSubscription(subscription, ValidTopic());
+
+            // Assert
+            Assert.Equal(accepted, errors.Count == 0);
         }
 
         [Fact]
@@ -229,9 +262,11 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             int? timeout = 30,
             int? maxCount = 10,
             IReadOnlyList<SubscriptionHeader> headers = null,
-            IReadOnlyList<SubscriptionFilter> filters = null) => new()
+            IReadOnlyList<SubscriptionFilter> filters = null,
+            SubscriptionStatusCode status = SubscriptionStatusCode.Requested) => new()
         {
             Id = "s1",
+            Status = status,
             TopicCanonical = "http://example.org/topic/encounter",
             ChannelType = channelType,
             Endpoint = endpoint,

@@ -187,24 +187,30 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             EnsureArg.IsNotNull(subscription, nameof(subscription));
             var errors = new List<string>();
 
-            if (topic == null)
+            // A stopped subscription sends nothing, so it can still be switched off after its topic is retired or deleted, or the
+            // endpoint policy is tightened. Requesting it again validates the topic and endpoint.
+            bool live = subscription.Status.IsLive();
+            if (live)
             {
-                errors.Add(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionTopicNotFound, subscription.TopicCanonical));
-            }
-            else if (string.Equals(topic.Status, "retired", StringComparison.Ordinal))
-            {
-                errors.Add(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionTopicRetired, subscription.TopicCanonical));
-            }
-            else if (_topicErrors.GetValue(topic, ValidateTopic).Count > 0)
-            {
-                errors.Add(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionTopicNotValid, subscription.TopicCanonical));
+                if (topic == null)
+                {
+                    errors.Add(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionTopicNotFound, subscription.TopicCanonical));
+                }
+                else if (string.Equals(topic.Status, "retired", StringComparison.Ordinal))
+                {
+                    errors.Add(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionTopicRetired, subscription.TopicCanonical));
+                }
+                else if (_topicErrors.GetValue(topic, ValidateTopic).Count > 0)
+                {
+                    errors.Add(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionTopicNotValid, subscription.TopicCanonical));
+                }
             }
 
             if (string.IsNullOrEmpty(subscription.ChannelType) || !_channelTypes.Contains(subscription.ChannelType))
             {
                 errors.Add(string.Format(CultureInfo.InvariantCulture, Core.Resources.SubscriptionChannelNotSupported, subscription.ChannelType));
             }
-            else if (!_endpointPolicy.TryValidate(subscription.Endpoint, out string endpointError))
+            else if (live && !_endpointPolicy.TryValidate(subscription.Endpoint, out string endpointError))
             {
                 errors.Add(endpointError);
             }

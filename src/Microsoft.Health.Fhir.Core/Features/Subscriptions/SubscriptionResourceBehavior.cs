@@ -219,7 +219,10 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
 
             string contentHash = info.ComputeContentHash();
             SubscriptionGrant grant = _authorizer.CreateGrant(_requestContextAccessor.RequestContext, contentHash);
-            foreach (string type in topic.ResourceTriggers.Select(t => SubscriptionMatcher.GetTypeName(t.Resource)).Distinct(StringComparer.Ordinal))
+
+            // The topic is missing only when the subscription is stopped, which keeps no grant.
+            IEnumerable<TopicResourceTrigger> triggers = topic?.ResourceTriggers ?? [];
+            foreach (string type in triggers.Select(t => SubscriptionMatcher.GetTypeName(t.Resource)).Distinct(StringComparer.Ordinal))
             {
                 // Base types need access to every resource type, which SMART expresses with the "all" scope.
                 string checkedType = SubscriptionMatcher.IsBaseType(type) ? "all" : type;

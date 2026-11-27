@@ -158,6 +158,19 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         }
 
         [Fact]
+        public async Task GivenASubscriptionWhoseTopicWasDeleted_WhenTheClientSetsOff_ThenItIsAccepted()
+        {
+            // Arrange: no topic is stored for the subscription's canonical.
+            ResourceElement written = null;
+
+            // Act
+            await UpsertAsync(Parse(SubscriptionResources.Subscription("http://example.org/none", Endpoint, id: "s1", status: "off")), r => written = r);
+
+            // Assert
+            Assert.Equal(SubscriptionStatusCode.Off, _converter.ToSubscription(written).Status);
+        }
+
+        [Fact]
         public async Task GivenASubscriptionToAPrivateEndpoint_WhenCreated_ThenItIsRejected()
         {
             _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
