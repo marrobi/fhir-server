@@ -64,6 +64,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
         private readonly RequestContextAccessor<IFhirRequestContext> _requestContextAccessor;
         private readonly ILogger<SubscriptionDeliveryService> _logger;
         private readonly ISubscriptionMetricHandler _metrics;
+        private readonly IFhirServerInstanceConfiguration _instanceConfiguration;
         private readonly string _worker = $"{Environment.MachineName}.{Environment.ProcessId}.{Guid.NewGuid():N}";
         private volatile bool _storageReady;
         private DateTimeOffset _nextHealthReportUtc = DateTimeOffset.MinValue;
@@ -80,7 +81,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
             IEnumerable<ISubscriptionChannel> channels,
             RequestContextAccessor<IFhirRequestContext> requestContextAccessor,
             ILogger<SubscriptionDeliveryService> logger,
-            ISubscriptionMetricHandler metrics = null)
+            ISubscriptionMetricHandler metrics = null,
+            IFhirServerInstanceConfiguration instanceConfiguration = null)
         {
             _configuration = EnsureArg.IsNotNull(configuration?.Value, nameof(configuration));
             _registry = EnsureArg.IsNotNull(registry, nameof(registry));
@@ -94,6 +96,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
             _requestContextAccessor = EnsureArg.IsNotNull(requestContextAccessor, nameof(requestContextAccessor));
             _logger = EnsureArg.IsNotNull(logger, nameof(logger));
             _metrics = metrics;
+            _instanceConfiguration = instanceConfiguration;
         }
 
         public Task HandleAsync(SearchParametersInitializedNotification notification, CancellationToken cancellationToken)
@@ -618,7 +621,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions.Delivery
 
         private void SetBackgroundRequestContext()
         {
-            _requestContextAccessor.RequestContext = SubscriptionBackgroundContext.Create("SubscriptionDelivery");
+            _requestContextAccessor.RequestContext = SubscriptionBackgroundContext.Create("SubscriptionDelivery", _instanceConfiguration?.BaseUri);
         }
     }
 }

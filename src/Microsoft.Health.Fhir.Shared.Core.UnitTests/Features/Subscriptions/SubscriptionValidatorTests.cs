@@ -128,6 +128,15 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             Assert.Empty(_validator.ValidateSubscription(subscription, Copy(ValidTopic(), hasEventTriggers: true)));
         }
 
+        [Fact]
+        public void GivenAFilterTheTopicNoLongerAllows_WhenValidated_ThenOnlyAStoppedSubscriptionIsAccepted()
+        {
+            IReadOnlyList<SubscriptionFilter> filters = [new SubscriptionFilter { ResourceType = "Encounter", FilterParameter = "status", Value = "finished" }];
+
+            Assert.Empty(_validator.ValidateSubscription(With(filters: filters, status: SubscriptionStatusCode.Off), ValidTopic()));
+            Assert.NotEmpty(_validator.ValidateSubscription(With(filters: filters), ValidTopic()));
+        }
+
         public static IEnumerable<object[]> InvalidSubscriptions()
         {
             yield return [With(channelType: "websocket")];

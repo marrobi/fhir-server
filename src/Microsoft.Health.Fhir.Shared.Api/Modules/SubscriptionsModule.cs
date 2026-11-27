@@ -50,6 +50,7 @@ namespace Microsoft.Health.Fhir.Api.Modules
             services.AddSingleton<SubscriptionAuthorizer>();
             services.AddSingleton<SubscriptionValidator>();
             services.AddSingleton<SubscriptionRegistry>();
+            services.AddSingleton<ISubscriptionTopicDeletionGuard, SubscriptionTopicDeletionGuard>();
             services.AddSingleton<SubscriptionEventProcessor>();
             services.AddSingleton<ISubscriptionChannel, RestHookSubscriptionChannel>();
             services.TryAddSingleton<ISubscriptionMetricHandler, DefaultSubscriptionMetricHandler>();
@@ -57,7 +58,9 @@ namespace Microsoft.Health.Fhir.Api.Modules
             // The SQL Server registration replaces this; other data stores do not support subscriptions.
             services.TryAddSingleton<ISubscriptionStore, UnsupportedSubscriptionStore>();
 
+            // Each notification is cancelled after its subscription's timeout, which can exceed HttpClient's 100 second default.
             services.AddHttpClient(RestHookSubscriptionChannel.HttpClientName)
+                .ConfigureHttpClient(client => client.Timeout = System.Threading.Timeout.InfiniteTimeSpan)
                 .ConfigurePrimaryHttpMessageHandler(provider => CreateRestHookHandler(provider.GetRequiredService<SubscriptionEndpointPolicy>()));
 
             services

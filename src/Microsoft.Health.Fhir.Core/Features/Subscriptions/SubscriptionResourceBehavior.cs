@@ -41,8 +41,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
     public sealed class SubscriptionResourceBehavior :
         IPipelineBehavior<CreateResourceRequest, UpsertResourceResponse>,
         IPipelineBehavior<UpsertResourceRequest, UpsertResourceResponse>,
-        IPipelineBehavior<DeleteResourceRequest, DeleteResourceResponse>,
-        IPipelineBehavior<ConditionalDeleteResourceRequest, DeleteResourceResponse>
+        IPipelineBehavior<DeleteResourceRequest, DeleteResourceResponse>
     {
         private readonly SubscriptionsConfiguration _configuration;
         private readonly ISubscriptionModelConverter _converter;
@@ -152,13 +151,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             }
 
             string resourceType = request.ResourceKey.ResourceType;
-            if (string.Equals(resourceType, _converter.TopicResourceType, StringComparison.Ordinal) &&
-                await IsStoredTopicAsync(resourceType, request.ResourceKey.Id, cancellationToken))
-            {
-                await CheckTopicPermissionAsync(cancellationToken);
-                _registry.Invalidate();
-            }
 
+            // Deleting a topic is checked by the deletion service, which every delete reaches, including conditional deletes.
             DeleteResourceResponse response = await next();
 
             // $purge-history keeps the current version, so the subscription and its state remain.
@@ -171,22 +165,6 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             }
 
             return response;
-        }
-
-        public async Task<DeleteResourceResponse> HandleAsync(ConditionalDeleteResourceRequest request, RequestHandlerDelegate<DeleteResourceResponse> next, CancellationToken cancellationToken)
-        {
-            EnsureArg.IsNotNull(request, nameof(request));
-            EnsureArg.IsNotNull(next, nameof(next));
-
-            // The matched resources are not known before the delete runs, so any conditional delete of the topic resource type needs
-            // the permission. On R4 this applies to every conditional delete of Basic resources.
-            if (IsActive && string.Equals(request.ResourceType, _converter.TopicResourceType, StringComparison.Ordinal))
-            {
-                await CheckTopicPermissionAsync(cancellationToken);
-                _registry.Invalidate();
-            }
-
-            return await next();
         }
 
         private async Task<UpsertResourceResponse> WriteSubscriptionAsync(ResourceElement resource, ResourceElement existing, RequestHandlerDelegate<UpsertResourceResponse> next, CancellationToken cancellationToken)
@@ -220,8 +198,9 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             string contentHash = info.ComputeContentHash();
             SubscriptionGrant grant = _authorizer.CreateGrant(_requestContextAccessor.RequestContext, contentHash);
 
-            // The topic is missing only when the subscription is stopped, which keeps no grant.
-            IEnumerable<TopicResourceTrigger> triggers = topic?.ResourceTriggers ?? [];
+            // A stopped subscription keeps no grant and receives nothing, so the caller's read access to the topic's types is only
+            // checked when it is requested. Its topic may also be missing.
+            IEnumerable<TopicResourceTrigger> triggers = info.Status.IsLive() ? topic.ResourceTriggers : [];
             foreach (string type in triggers.Select(t => SubscriptionMatcher.GetTypeName(t.Resource)).Distinct(StringComparer.Ordinal))
             {
                 // Base types need access to every resource type, which SMART expresses with the "all" scope.

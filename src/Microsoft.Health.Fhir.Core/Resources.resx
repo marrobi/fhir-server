@@ -1119,6 +1119,9 @@
   <data name="SubscriptionTopicRetired" xml:space="preserve">
     <value>The subscription topic '{0}' is retired.</value>
   </data>
+  <data name="SubscriptionTopicInUse" xml:space="preserve">
+    <value>The subscription topic '{0}' cannot be deleted because subscription '{1}' uses it. Set the subscriptions that use it to 'off' or delete them first.</value>
+  </data>
   <data name="SubscriptionTopicNotValid" xml:space="preserve">
     <value>The subscription topic '{0}' is not valid on this server.</value>
   </data>

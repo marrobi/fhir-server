@@ -56,6 +56,36 @@ To try the change-feed event source instead of `Transactions`, add these to the 
       FhirServer__Subscriptions__EventSource: "ResourceChangeData"
 ```
 
+## Benchmark
+
+[benchmark.py](benchmark.py) measures write throughput with subscriptions active, and the events it causes give the pump lag
+and delivery latency. Run it from the receiver container, first to create subscriptions (one per patient, all on one R4 topic),
+then to write Encounters that each match exactly one subscription:
+
+```bash
+docker compose exec webhook python /app/benchmark.py subscribe http://fhir-api:8080 http://webhook:8080 100
+docker compose exec webhook python /app/benchmark.py write http://fhir-api:8080 5000 16 100      # writes, concurrency, patients [, bundle size]
+```
+
+Both print JSON: `subscribe` reports how long creation and activation took, and `write` reports writes per second and call
+latency percentiles. When the receiver has the notifications, read the lags from the database. `EventDate` is when the resource
+was written, `NextAttemptDate` is when the pump recorded the event (it only changes after a failed attempt, so only first-attempt
+deliveries are counted), and `StatusDate` is when it was delivered:
+
+```sql
+SELECT count(*) AS Delivered
+      ,avg(datediff_big(millisecond, EventDate, NextAttemptDate)) AS AvgPumpLagMs
+      ,max(datediff_big(millisecond, EventDate, NextAttemptDate)) AS MaxPumpLagMs
+      ,avg(datediff_big(millisecond, EventDate, StatusDate)) AS AvgDeliveryLatencyMs
+      ,max(datediff_big(millisecond, EventDate, StatusDate)) AS MaxDeliveryLatencyMs
+  FROM dbo.SubscriptionEvents
+  WHERE Status = 1 AND Attempts = 0
+```
+
+For example, `docker compose exec sql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$SAPASSWORD" -C -d FHIR -Q "<query>"`.
+
+## Clean up
+
 ```bash
 docker compose down -v
 ```

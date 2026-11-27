@@ -30,6 +30,7 @@ using Microsoft.Health.Fhir.Core.Features.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Search;
 using Microsoft.Health.Fhir.Core.Features.Search.Parameters;
 using Microsoft.Health.Fhir.Core.Features.Security;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Validation;
 using Microsoft.Health.Fhir.Core.Messages.Delete;
@@ -68,6 +69,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Resources.Delete
         private readonly IProvideProfilesForValidation _profilesProvider = Substitute.For<IProvideProfilesForValidation>();
         private readonly IAuthorizationService<DataActions> _authorizationService = Substitute.For<IAuthorizationService<DataActions>>();
         private readonly ISubscriptionStore _subscriptionStore = Substitute.For<ISubscriptionStore>();
+        private readonly ISubscriptionTopicDeletionGuard _topicDeletionGuard = Substitute.For<ISubscriptionTopicDeletionGuard>();
         private readonly ILogger<DeletionService> _logger = Substitute.For<ILogger<DeletionService>>();
         private readonly DeletionService _service;
 
@@ -113,6 +115,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Resources.Delete
                 _profilesProvider,
                 _authorizationService,
                 _subscriptionStore,
+                _topicDeletionGuard,
                 _logger);
         }
 
@@ -506,6 +509,28 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Resources.Delete
 
             // Assert
             await _subscriptionStore.Received(expectRemoved ? 1 : 0).DeleteStateAsync("s1", Arg.Any<CancellationToken>());
+            await _topicDeletionGuard.Received(1).EnsureCanDeleteAsync(
+                Arg.Is<IEnumerable<(string ResourceType, string Id)>>(r => r.Single().Equals(ValueTuple.Create(KnownResourceTypes.Subscription, "s1"))),
+                true,
+                expectRemoved,
+                Arg.Any<CancellationToken>());
+        }
+
+        [Fact]
+        public async Task GivenATopicThatCannotBeDeleted_WhenDeletedById_ThenNothingIsDeleted()
+        {
+            // Arrange: covers the single delete that both DELETE Type/id and a single-match conditional delete reach.
+            var dataStore = CreateFhirDataStore();
+            _dataStoreFactory.GetScopedDataStore().Returns(new DeletionServiceScopedDataStore(dataStore));
+            _topicDeletionGuard
+                .EnsureCanDeleteAsync(Arg.Any<IEnumerable<(string ResourceType, string Id)>>(), true, true, Arg.Any<CancellationToken>())
+                .Returns(Task.FromException(new ResourceConflictException("in use")));
+
+            // Act
+            await Assert.ThrowsAsync<ResourceConflictException>(() => _service.DeleteAsync(new DeleteResourceRequest("Basic", "t1", DeleteOperation.HardDelete), CancellationToken.None));
+
+            // Assert
+            await dataStore.DidNotReceiveWithAnyArgs().HardDeleteAsync(default, default, default, default);
         }
 
         [Theory]

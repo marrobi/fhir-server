@@ -43,7 +43,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         private readonly InMemorySubscriptionStore _store = new();
         private readonly InMemorySubscriptionResources _resources;
         private readonly RecordingChannel _channel = new();
-        private readonly SubscriptionsConfiguration _configuration = new() { Enabled = true, MaxDeliveryAttempts = 3, RetryBaseDelaySeconds = 0, RegistryRefreshIntervalSeconds = 0 };
+        private readonly SubscriptionsConfiguration _configuration = new() { Enabled = true, MaxDeliveryAttempts = 3, RetryBaseDelaySeconds = 0, RegistryRefreshIntervalSeconds = 0, MaxLifetimeDays = 365 };
         private readonly SubscriptionAuthorizer _authorizer;
         private readonly SubscriptionDeliveryService _service;
         private readonly ISubscriptionMetricHandler _metrics = Substitute.For<ISubscriptionMetricHandler>();

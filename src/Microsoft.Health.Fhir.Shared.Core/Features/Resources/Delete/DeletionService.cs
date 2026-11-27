@@ -33,6 +33,7 @@ using Microsoft.Health.Fhir.Core.Features.Search;
 using Microsoft.Health.Fhir.Core.Features.Search.Parameters;
 using Microsoft.Health.Fhir.Core.Features.Security;
 using Microsoft.Health.Fhir.Core.Features.Security.Authorization;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Validation;
 using Microsoft.Health.Fhir.Core.Messages.Delete;
@@ -62,6 +63,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Persistence
         private readonly IProvideProfilesForValidation _profilesProvider;
         private readonly IAuthorizationService<DataActions> _authorizationService;
         private readonly ISubscriptionStore _subscriptionStore;
+        private readonly ISubscriptionTopicDeletionGuard _topicDeletionGuard;
         private readonly ILogger<DeletionService> _logger;
         private readonly SemaphoreSlim _searchParamDeleteSemaphore;
         private bool _disposed;
@@ -84,6 +86,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Persistence
             IProvideProfilesForValidation profilesProvider,
             IAuthorizationService<DataActions> authorizationService,
             ISubscriptionStore subscriptionStore,
+            ISubscriptionTopicDeletionGuard topicDeletionGuard,
             ILogger<DeletionService> logger)
         {
             _resourceWrapperFactory = EnsureArg.IsNotNull(resourceWrapperFactory, nameof(resourceWrapperFactory));
@@ -101,6 +104,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Persistence
             _profilesProvider = EnsureArg.IsNotNull(profilesProvider, nameof(profilesProvider));
             _authorizationService = EnsureArg.IsNotNull(authorizationService, nameof(authorizationService));
             _subscriptionStore = EnsureArg.IsNotNull(subscriptionStore, nameof(subscriptionStore));
+            _topicDeletionGuard = EnsureArg.IsNotNull(topicDeletionGuard, nameof(topicDeletionGuard));
             _searchParamDeleteSemaphore = new SemaphoreSlim(1, 1);
 
             _retryPolicy = Policy
@@ -118,6 +122,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Persistence
             {
                 throw new MethodNotAllowedException(Core.Resources.DeleteVersionNotAllowed);
             }
+
+            await EnsureTopicsCanBeDeletedAsync([(key.ResourceType, key.Id)], request.DeleteOperation, cancellationToken);
 
             string version = null;
             using var scopedDataStore = _dataStoreFactory.GetScopedDataStore();
@@ -220,6 +226,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Persistence
             {
                 results = FilterProfileResourcesForBulkDelete(results, onProfileResourceSkipped);
             }
+
+            await EnsureTopicsCanBeDeletedAsync(results.Select(r => (r.Resource.ResourceTypeName, r.Resource.ResourceId)), request.DeleteOperation, cancellationToken);
 
             Dictionary<string, long> resourceTypesDeleted = new Dictionary<string, long>();
             long numQueuedForDeletion = 0;
@@ -326,6 +334,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Persistence
                         {
                             results = FilterProfileResourcesForBulkDelete(results, onProfileResourceSkipped);
                         }
+
+                        await EnsureTopicsCanBeDeletedAsync(results.Select(r => (r.Resource.ResourceTypeName, r.Resource.ResourceId)), request.DeleteOperation, cancellationToken);
 
                         // If the next page of results has more than one page of included results, delete all pages of included results before deleting the primary results.
                         if (!request.IsIncludesRequest && AreIncludeResultsTruncated(ict))
@@ -621,6 +631,13 @@ namespace Microsoft.Health.Fhir.Core.Features.Persistence
             _logger.LogInformation("Soft deleted {Count} resources with request {RequestId}", results.Sum(x => x.Value), guid);
 
             return results;
+        }
+
+        private Task EnsureTopicsCanBeDeletedAsync(IEnumerable<(string ResourceType, string Id)> resources, DeleteOperation deleteOperation, CancellationToken cancellationToken)
+        {
+            // Background jobs had the permission checked when they were created; a topic in use is refused either way (ADR-2611).
+            bool isBackground = _contextAccessor.RequestContext == null || _contextAccessor.RequestContext.IsBackgroundTask;
+            return _topicDeletionGuard.EnsureCanDeleteAsync(resources, checkPermission: !isBackground, removesCurrentVersion: deleteOperation != DeleteOperation.PurgeHistory, cancellationToken);
         }
 
         private async Task RemoveSubscriptionStatesAsync(DeleteOperation deleteOperation, IReadOnlyCollection<SearchResultEntry> resourcesToDelete, CancellationToken cancellationToken)

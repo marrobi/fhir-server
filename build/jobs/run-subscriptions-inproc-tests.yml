@@ -1,0 +1,67 @@
+# Runs the topic-based subscription E2E tests (Category=Subscriptions) against an in-process server. These tests need a server with
+# subscriptions enabled that can reach a webhook receiver on the test agent, so they cannot run against the deployed test
+# environments and are skipped there. The server runs from the repository sources, against a throwaway SQL Server 2025 container
+# (schema 123 and later use the vector type).
+parameters:
+- name: version
+  type: string
+
+jobs:
+- job: 'sqlE2eTests_SubscriptionsInProc'
+  displayName: 'E2E ${{ parameters.version }} SqlServer Subscriptions (in-proc)'
+  timeoutInMinutes: 60
+  dependsOn: []
+  pool:
+    name: '$(InternalPool)'
+    demands:
+      - ImageOverride -equals $(InternalLinuxImage)
+  steps:
+  - checkout: self
+    fetchDepth: 1
+    fetchTags: false
+
+  - task: UseDotNet@2
+    displayName: 'Use .NET SDK from global.json'
+    inputs:
+      useGlobalJson: true
+
+  - task: Bash@3
+    displayName: 'Start SQL Server 2025 container'
+    inputs:
+      targetType: inline
+      script: |
+        set -euo pipefail
+        password="$(openssl rand -hex 16)Aa1!"
+        echo "##vso[task.setvariable variable=SubscriptionsSqlPassword;issecret=true]$password"
+        docker run -d --name subscriptions-sql -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=$password" -p 1433:1433 mcr.microsoft.com/mssql/server:2025-latest
+        for i in $(seq 1 90); do
+          if docker exec subscriptions-sql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$password" -C -Q "SELECT 1" > /dev/null 2>&1; then
+            exit 0
+          fi
+          sleep 2
+        done
+        docker logs subscriptions-sql
+        exit 1
+
+  - task: Bash@3
+    displayName: 'Run ${{ parameters.version }} subscription E2E tests in-proc'
+    inputs:
+      targetType: inline
+      script: |
+        set -euo pipefail
+        dotnet test --project "test/Microsoft.Health.Fhir.${{ parameters.version }}.Tests.E2E" --configuration $(buildConfiguration) \
+          --filter-query "/[(DataStore=SqlServer)&(Category=Subscriptions)]" \
+          --retry-failed-tests 3 --report-trx --publish-azdo-test-results \
+          --publish-azdo-run-name "${{ parameters.version }} SqlServer Subscriptions (in-proc)"
+    env:
+      # The in-proc server reads this; TestEnvironmentUrl is deliberately not set, so the tests start the server in-proc.
+      SqlServer__ConnectionString: 'Server=localhost,1433;Initial Catalog=FHIR_Subscriptions;User Id=sa;Password=$(SubscriptionsSqlPassword);TrustServerCertificate=True'
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+      platformOptions__resultDirectory: '$(Agent.TempDirectory)/testresults'
+
+  - task: Bash@3
+    displayName: 'Remove SQL Server container'
+    condition: always()
+    inputs:
+      targetType: inline
+      script: docker rm -f subscriptions-sql || true

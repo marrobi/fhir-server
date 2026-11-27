@@ -11,6 +11,9 @@ DECLARE @SP varchar(100) = object_name(@@procid)
        ,@Mode varchar(200) = 'S='+isnull(@SubscriptionId,'NULL')
        ,@st datetime = getUTCdate()
        ,@Visibility bigint
+       ,@Now datetime
+       ,@Rows int = 0
+       ,@Batch int
 
 BEGIN TRY
   BEGIN TRANSACTION
@@ -31,13 +34,25 @@ BEGIN TRY
   IF @@rowcount = 0
     INSERT INTO dbo.SubscriptionStates (SubscriptionId, ActivationTransactionId) SELECT @SubscriptionId, @Visibility
 
-  UPDATE dbo.SubscriptionEvents SET Attempts = 0, NextAttemptDate = getUTCdate() WHERE SubscriptionId = @SubscriptionId AND Status = 0
-
   SET @ActivationTransactionId = (SELECT ActivationTransactionId FROM dbo.SubscriptionStates WHERE SubscriptionId = @SubscriptionId)
 
   COMMIT TRANSACTION
 
-  EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Text=@ActivationTransactionId
+  -- The retained backlog can be large after a long error period. It is made due again after the counter lock is released, in
+  -- batches below the lock escalation threshold, so the event pump and other subscriptions keep running. Each batch only takes
+  -- rows not yet reset, so the loop ends; a failure part way leaves the remaining events on their previous schedule.
+  SET @Now = getUTCdate()
+  WHILE 1 = 1
+  BEGIN
+    UPDATE TOP (4000) dbo.SubscriptionEvents
+      SET Attempts = 0, NextAttemptDate = @Now
+      WHERE SubscriptionId = @SubscriptionId AND Status = 0 AND (Attempts <> 0 OR NextAttemptDate > @Now)
+    SET @Batch = @@rowcount
+    IF @Batch = 0 BREAK
+    SET @Rows += @Batch
+  END
+
+  EXECUTE dbo.LogEvent @Process=@SP,@Mode=@Mode,@Status='End',@Start=@st,@Rows=@Rows,@Text=@ActivationTransactionId
 END TRY
 BEGIN CATCH
   IF @@trancount > 0 ROLLBACK TRANSACTION

@@ -24,16 +24,21 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         /// Creates a background request context.
         /// </summary>
         /// <param name="method">The name of the work, logged as the request method.</param>
+        /// <param name="baseUri">
+        /// The server's base URI. References to it are indexed and matched as internal, as they are for API requests, so filters
+        /// that use absolute server URLs match the same resources. Null only before the server has received its first request.
+        /// </param>
         /// <param name="correlationId">The correlation id, or null to use the current activity or a new id.</param>
         /// <returns>The request context.</returns>
-        public static FhirRequestContext Create(string method, string correlationId = null)
+        public static FhirRequestContext Create(string method, Uri baseUri, string correlationId = null)
         {
             EnsureArg.IsNotNullOrWhiteSpace(method, nameof(method));
 
+            string baseUriString = baseUri?.AbsoluteUri ?? LocalUri;
             return new FhirRequestContext(
                 method: method,
-                uriString: LocalUri,
-                baseUriString: LocalUri,
+                uriString: baseUriString,
+                baseUriString: baseUriString,
                 correlationId: correlationId ?? Activity.Current?.Id ?? Guid.NewGuid().ToString(),
                 requestHeaders: new Dictionary<string, StringValues>(),
                 responseHeaders: new Dictionary<string, StringValues>())

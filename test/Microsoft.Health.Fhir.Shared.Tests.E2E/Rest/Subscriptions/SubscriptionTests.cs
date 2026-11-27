@@ -355,13 +355,64 @@ namespace Microsoft.Health.Fhir.Tests.E2E.Rest.Subscriptions
         }
 
         [Fact]
-        public async Task GivenAReadOnlyUser_WhenCreatingATopic_ThenForbiddenIsReturned()
+        public async Task GivenAWriterWithoutTheTopicPermission_WhenWritingTopicsAndOrdinaryResources_ThenOnlyTheTopicWritesAreRefused()
         {
-            TestFhirClient reader = _fixture.TestFhirServer.GetTestFhirClient(_fixture.TestFhirClient.Format, TestApplications.ReadOnlyUser, user: null, reusable: false);
+            // Arrange: globalWriter has write and delete but not subscriptionTopic, so only the topic permission can refuse it.
+            TestFhirClient writer = _fixture.TestFhirServer.GetTestFhirClient(_fixture.TestFhirClient.Format, TestApplications.ReadWriteUser, user: null, reusable: false);
+            string topicId = Guid.NewGuid().ToString("N");
+            (HttpStatusCode created, JObject topic) = await SendAsync(HttpMethod.Put, $"{TopicType}/{topicId}", SubscriptionResources.Topic(NewTopicUrl(), topicId));
+            AssertStatus(HttpStatusCode.Created, created, topic);
+            string basicId = Guid.NewGuid().ToString("N");
+            string basic = new JObject
+            {
+                ["resourceType"] = "Basic",
+                ["id"] = basicId,
+                ["code"] = new JObject { ["coding"] = new JArray(new JObject { ["system"] = "http://example.org", ["code"] = "not-a-topic" }) },
+            }.ToString();
 
-            (HttpStatusCode code, _) = await SendAsync(HttpMethod.Post, TopicType, SubscriptionResources.Topic(NewTopicUrl(), Guid.NewGuid().ToString("N")), reader.HttpClient);
+            // Act
+            (HttpStatusCode createTopic, _) = await SendAsync(HttpMethod.Post, TopicType, SubscriptionResources.Topic(NewTopicUrl(), Guid.NewGuid().ToString("N")), writer.HttpClient);
+            (HttpStatusCode deleteTopic, _) = await SendAsync(HttpMethod.Delete, $"{TopicType}/{topicId}", client: writer.HttpClient);
+            (HttpStatusCode writeBasic, _) = await SendAsync(HttpMethod.Put, $"Basic/{basicId}", basic, writer.HttpClient);
+            (HttpStatusCode deleteBasic, _) = await SendAsync(HttpMethod.Delete, $"Basic?_id={basicId}", client: writer.HttpClient);
 
-            Assert.Equal(HttpStatusCode.Forbidden, code);
+            // Assert: on R4 topics are Basic resources, so a conditional delete of an ordinary Basic must not need the permission.
+            Assert.Equal(HttpStatusCode.Forbidden, createTopic);
+            Assert.Equal(HttpStatusCode.Forbidden, deleteTopic);
+            Assert.Equal(HttpStatusCode.Created, writeBasic);
+            Assert.Equal(HttpStatusCode.NoContent, deleteBasic);
+        }
+
+        [Fact]
+        public async Task GivenATopicALiveSubscriptionUses_WhenDeleted_ThenConflictIsReturnedUntilTheSubscriptionIsOff()
+        {
+            // Arrange
+            string topicId = Guid.NewGuid().ToString("N");
+            string topicUrl = NewTopicUrl();
+            (HttpStatusCode created, JObject topic) = await SendAsync(HttpMethod.Put, $"{TopicType}/{topicId}", SubscriptionResources.Topic(topicUrl, topicId));
+            AssertStatus(HttpStatusCode.Created, created, topic);
+            string endpoint = Webhook.BaseUrl + NewPath();
+            (HttpStatusCode code, JObject subscription) = await SendAsync(HttpMethod.Post, "Subscription", SubscriptionResources.Subscription(topicUrl, endpoint));
+            AssertStatus(HttpStatusCode.Created, code, subscription);
+            string subscriptionId = (string)subscription["id"];
+
+            try
+            {
+                // Act
+                (HttpStatusCode whileLive, JObject outcome) = await SendAsync(HttpMethod.Delete, $"{TopicType}/{topicId}");
+                (HttpStatusCode stopped, JObject off) = await SendAsync(HttpMethod.Put, $"Subscription/{subscriptionId}", SubscriptionResources.Subscription(topicUrl, endpoint, id: subscriptionId, status: "off"));
+                AssertStatus(HttpStatusCode.OK, stopped, off);
+                (HttpStatusCode afterOff, _) = await SendAsync(HttpMethod.Delete, $"{TopicType}/{topicId}");
+
+                // Assert
+                Assert.Equal(HttpStatusCode.Conflict, whileLive);
+                Assert.Contains(subscriptionId, Diagnostics(outcome), StringComparison.Ordinal);
+                Assert.Equal(HttpStatusCode.NoContent, afterOff);
+            }
+            finally
+            {
+                await DeleteAsync($"Subscription/{subscriptionId}");
+            }
         }
 
         [Fact]

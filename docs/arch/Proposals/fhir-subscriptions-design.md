@@ -431,7 +431,7 @@ All settings are under `FhirServer:Subscriptions`. **PG** marks defaults the pro
 | `EventSource` | `Transactions` | Change source. Cannot change after first use. **PG** |
 | `NotifyHistoricalVersions` | `false` | Whether history rows loaded by `$import` notify. **PG** |
 | `UnversionedResourceTypes` | `AllowWithGaps` | Whether topics are allowed on `no-version` types (`RequireHistory` rejects them). **PG** |
-| `MaxLifetimeDays` | `0` (never expire) | Optional maximum lifetime. When it is set, the server caps `end`, and expired subscriptions are switched `off`, never deleted. The prototype currently defaults to 365, which must change to match. **PG** |
+| `MaxLifetimeDays` | `0` (never expire) | Optional maximum lifetime. When it is set, the server caps `end`, and expired subscriptions are switched `off`, never deleted. **PG** |
 | `MaxActiveSubscriptions` | 1000 | Cap on active subscriptions. Not yet measured. |
 | `MaxHistoryCleanupHoldHours` | 24 | Minimum time invisible history is kept while the feature is on. |
 | `TransactionReadLagSeconds` | 5 | Read margin for SQL clock steps, also applied before activation. |
@@ -597,7 +597,7 @@ A prototype was built to test the design. It is on [`marrobi/fhir-server` `featu
 - **Imported history:** a version counts as written as history if a later version of the same resource was already written by the same or an earlier transaction. `NotifyHistoricalVersions` applies only to these versions, not to ordinary versions that became history later.
 - **Clock steps:** SQL clock steps of about 0.7 seconds were seen on laptops. This led to `TransactionReadLagSeconds` (design decision 4).
 - **Metrics:** the `FhirServer` meter should report worker progress and lag, event outcomes, send attempts and duration, status changes, late transactions, subscriptions in `error`, waiting events and the age of the oldest waiting event.
-- **Tests:** the prototype has unit, SQL integration and in-process HTTP E2E tests for R4, R4B and R5. No load or latency results are recorded yet.
+- **Tests:** the prototype has unit, SQL integration and in-process HTTP E2E tests for R4, R4B and R5. The E2E tests need a server with subscriptions enabled that can reach a receiver on the test agent, so CI runs them in a separate in-process job against a SQL Server container (`build/jobs/run-subscriptions-inproc-tests.yml`) and skips them against the deployed environments. No load or latency results are recorded yet.
 
 ## Appendix A. Lessons from earlier attempts
 

@@ -6,7 +6,9 @@
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Microsoft.Health.Fhir.Api.Modules;
 using Microsoft.Health.Fhir.Core.Configs;
@@ -29,6 +31,23 @@ namespace Microsoft.Health.Fhir.Api.UnitTests.Modules
 
             Assert.False(handler.UseProxy);
             Assert.False(handler.AllowAutoRedirect);
+        }
+
+        [Fact]
+        public void GivenTheRestHookClient_WhenCreated_ThenItHasNoTimeoutOfItsOwn()
+        {
+            // Arrange: each notification is cancelled after its subscription's timeout, which can exceed HttpClient's 100 second default.
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddSingleton(Options.Create(new SubscriptionsConfiguration()));
+            new SubscriptionsModule().Load(services);
+            using ServiceProvider provider = services.BuildServiceProvider();
+
+            // Act
+            HttpClient client = provider.GetRequiredService<IHttpClientFactory>().CreateClient(RestHookSubscriptionChannel.HttpClientName);
+
+            // Assert
+            Assert.Equal(Timeout.InfiniteTimeSpan, client.Timeout);
         }
 
         [Theory]

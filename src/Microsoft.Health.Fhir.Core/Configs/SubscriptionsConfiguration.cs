@@ -74,9 +74,10 @@ namespace Microsoft.Health.Fhir.Core.Configs
 
         /// <summary>
         /// Gets or sets the maximum subscription lifetime, in days. A subscription without <c>end</c>, or with a later <c>end</c>,
-        /// is given an <c>end</c> at most this far in the future. Zero disables the limit.
+        /// is given an <c>end</c> at most this far in the future. Zero, the default, disables the limit (ADR-2611 decision 6), because a
+        /// client that never renews would otherwise stop receiving notifications without noticing.
         /// </summary>
-        public int MaxLifetimeDays { get; set; } = 365;
+        public int MaxLifetimeDays { get; set; }
 
         /// <summary>
         /// Gets or sets the number of days delivered and unevaluable events are retained.

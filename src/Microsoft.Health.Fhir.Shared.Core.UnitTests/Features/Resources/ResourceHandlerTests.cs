@@ -37,6 +37,7 @@ using Microsoft.Health.Fhir.Core.Features.Search.Filters;
 using Microsoft.Health.Fhir.Core.Features.Search.Parameters;
 using Microsoft.Health.Fhir.Core.Features.Search.Registry;
 using Microsoft.Health.Fhir.Core.Features.Security;
+using Microsoft.Health.Fhir.Core.Features.Subscriptions;
 using Microsoft.Health.Fhir.Core.Features.Subscriptions.Persistence;
 using Microsoft.Health.Fhir.Core.Features.Validation;
 using Microsoft.Health.Fhir.Core.Messages.Create;
@@ -152,6 +153,7 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Resources
                 _profilesProvider,
                 _authorizationService,
                 new UnsupportedSubscriptionStore(),
+                Substitute.For<ISubscriptionTopicDeletionGuard>(),
                 logger);
 
             var conditionalCreateLogger = Substitute.For<ILogger<ConditionalCreateResourceHandler>>();

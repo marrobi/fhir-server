@@ -82,6 +82,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\InMemorySubscriptionResources.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\RecordingChannel.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionAuthorizerTests.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionBackgroundContextTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionDeliveryServiceTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionEndpointPolicyTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionEventProcessorTests.cs" />
@@ -92,6 +93,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionQueryParserTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionResourceBehaviorTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionTestFixture.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionTopicDeletionGuardTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionTopicProfileTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionsBackportProfilesTests.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Features\Subscriptions\SubscriptionValidatorTests.cs" />

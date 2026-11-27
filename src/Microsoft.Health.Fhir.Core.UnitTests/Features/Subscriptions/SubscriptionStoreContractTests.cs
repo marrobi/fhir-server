@@ -25,6 +25,8 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
     [Trait(Traits.Category, Categories.Subscriptions)]
     public abstract class SubscriptionStoreContractTests
     {
+        private const int LargerThanOneBatch = 4100;
+
         protected abstract ISubscriptionStore Store { get; }
 
         /// <summary>
@@ -154,6 +156,47 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             await Store.ActivateAsync("s1", CancellationToken.None);
             Assert.Equal(["s1"], await Store.GetSubscriptionsWithDueEventsAsync(CancellationToken.None));
             Assert.Equal(0, Assert.Single(await Store.GetPendingEventsAsync("s1", 10, CancellationToken.None)).Attempts);
+        }
+
+        [Fact]
+        public async Task GivenABacklogLargerThanOneBatch_WhenTheSubscriptionIsActivatedAgain_ThenEveryEventIsDueWithNoAttempts()
+        {
+            // Arrange: SQL Server resets the backlog in batches of 4000, so this needs more than one batch.
+            await GrantAndActivateAsync("s1");
+            IReadOnlyList<long> numbers = await AddPendingEventsAsync("s1", LargerThanOneBatch);
+            await Store.RecordFailedAttemptAsync("s1", numbers, DateTimeOffset.UtcNow.AddHours(1), "HTTP 503", CancellationToken.None);
+
+            // Act
+            await Store.ActivateAsync("s1", CancellationToken.None);
+
+            // Assert
+            IReadOnlyList<SubscriptionEventRecord> pending = await Store.GetPendingEventsAsync("s1", LargerThanOneBatch, CancellationToken.None);
+            Assert.Equal(LargerThanOneBatch, pending.Count);
+            Assert.All(pending, e => Assert.Equal(0, e.Attempts));
+            Assert.Equal(["s1"], await Store.GetSubscriptionsWithDueEventsAsync(CancellationToken.None));
+        }
+
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public async Task GivenABacklogLargerThanOneBatch_WhenRevokedOrTheContentChanges_ThenEveryEventIsRetired(bool revoke)
+        {
+            // Arrange
+            await GrantAndActivateAsync("s1", "h1");
+            await AddPendingEventsAsync("s1", LargerThanOneBatch);
+
+            // Act
+            if (revoke)
+            {
+                await Store.DeactivateAsync("s1", revokeGrant: true, CancellationToken.None);
+            }
+            else
+            {
+                await Store.SaveGrantAsync("s1", "h2", "{}", CancellationToken.None);
+            }
+
+            // Assert
+            Assert.Empty(await Store.GetPendingEventsAsync("s1", LargerThanOneBatch, CancellationToken.None));
         }
 
         [Fact]

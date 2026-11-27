@@ -133,6 +133,12 @@ jobs:
       expectedKeyVaultName: '${{ parameters.keyVaultName }}'
       expectedSqlDatabaseName: '${{ parameters.expectedSqlDatabaseName }}'
 
+# Subscription E2E tests need an in-proc server, so they run once per version alongside the integration tests.
+- ${{ if eq(parameters.runIntegrationTests, true) }}:
+  - template: run-subscriptions-inproc-tests.yml
+    parameters:
+      version: ${{ parameters.version }}
+
 - ${{ if eq(parameters.runReindexJob, true) }}:
   - job: 'sqlE2eTests_Reindex'
     timeoutInMinutes: 120

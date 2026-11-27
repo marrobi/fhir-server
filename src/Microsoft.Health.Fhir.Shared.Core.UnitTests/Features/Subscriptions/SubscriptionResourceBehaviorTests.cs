@@ -171,6 +171,23 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
         }
 
         [Fact]
+        public async Task GivenACallerWhoCannotReadTheTopicsTypes_WhenTheSubscriptionIsWritten_ThenOnlyStoppingItIsAccepted()
+        {
+            // Arrange: the topic triggers on Encounter, but the caller's SMART scopes only allow Patient.
+            _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
+            _requestContext.AccessControlContext.ApplyFineGrainedAccessControl = true;
+            _requestContext.AccessControlContext.AllowedResourceActions.Add(new ScopeRestriction("Patient", DataActions.Read, "user"));
+            ResourceElement written = null;
+
+            // Act
+            await UpsertAsync(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "s1", status: "off")), r => written = r);
+
+            // Assert
+            Assert.Equal(SubscriptionStatusCode.Off, _converter.ToSubscription(written).Status);
+            await Assert.ThrowsAsync<UnauthorizedFhirActionException>(() => UpsertAsync(Parse(SubscriptionResources.Subscription(TopicUrl, Endpoint, id: "s1"))));
+        }
+
+        [Fact]
         public async Task GivenASubscriptionToAPrivateEndpoint_WhenCreated_ThenItIsRejected()
         {
             _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
@@ -343,18 +360,6 @@ namespace Microsoft.Health.Fhir.Core.UnitTests.Features.Subscriptions
             await _behavior.HandleAsync(new DeleteResourceRequest("Subscription", "s1", DeleteOperation.PurgeHistory), () => Task.FromResult(new DeleteResourceResponse(new ResourceKey("Subscription", "s1"))), CancellationToken.None);
 
             Assert.Equal("{}", _store.States["s1"].Grant);
-        }
-
-        [Fact]
-        public async Task GivenAStoredTopic_WhenDeletedWithoutThePermission_ThenItIsRejected()
-        {
-            _resources.Put(Parse(SubscriptionResources.Topic(TopicUrl)));
-            _authorizationService.CheckAccess(Arg.Any<DataActions>(), Arg.Any<CancellationToken>()).Returns(DataActions.Delete);
-
-            await Assert.ThrowsAsync<UnauthorizedFhirActionException>(() => _behavior.HandleAsync(
-                new DeleteResourceRequest(_converter.TopicResourceType, "t1", DeleteOperation.SoftDelete),
-                () => Task.FromResult(new DeleteResourceResponse(new ResourceKey(_converter.TopicResourceType, "t1"))),
-                CancellationToken.None));
         }
 
 #if R4 && !R4B

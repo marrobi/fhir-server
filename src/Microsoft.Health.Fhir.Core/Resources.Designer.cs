@@ -2826,6 +2826,15 @@ namespace Microsoft.Health.Fhir.Core {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to The subscription topic &#x27;{0}&#x27; cannot be deleted because subscription &#x27;{1}&#x27; uses it. Set the subscriptions that use it to &#x27;off&#x27; or delete them first..
+        /// </summary>
+        internal static string SubscriptionTopicInUse {
+            get {
+                return ResourceManager.GetString("SubscriptionTopicInUse", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to The subscription topic &#x27;{0}&#x27; is not valid on this server..
         /// </summary>
         internal static string SubscriptionTopicNotValid {

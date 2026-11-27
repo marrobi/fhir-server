@@ -106,7 +106,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             // The registry is shared by every caller, so it must not be filtered by the SMART scopes or compartment of whichever
             // request happens to trigger a load. Authorization of events uses each subscription's own grant instead.
             IFhirRequestContext callerContext = _requestContextAccessor.RequestContext;
-            _requestContextAccessor.RequestContext = SubscriptionBackgroundContext.Create("SubscriptionRegistry", callerContext?.CorrelationId);
+            _requestContextAccessor.RequestContext = SubscriptionBackgroundContext.Create("SubscriptionRegistry", callerContext?.BaseUri, callerContext?.CorrelationId);
 
             try
             {

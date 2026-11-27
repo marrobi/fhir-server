@@ -333,10 +333,12 @@ This file is based on or incorporates material from the projects listed below (T
   > (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
   > SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-## HL7 FHIR Subscriptions R5 Backport Implementation Guide 1.1.0 (test data)
+## HL7 FHIR Subscriptions R5 Backport Implementation Guide 1.1.0
 * Component Source:   https://hl7.org/fhir/uv/subscriptions-backport/
 * Component Copyright and License:
-  > Packages hl7.fhir.uv.subscriptions-backport.r4 and .r4b, used by tests to validate notifications.
+  > The R4 and R4B Backport subscription profile, extensions, ValueSet and CodeSystem, and the HL7 cross-version
+  > `extension-SubscriptionTopic.status` definition, are embedded in the server to validate and advertise subscriptions.
+  > Packages hl7.fhir.uv.subscriptions-backport.r4 and .r4b are also used by tests to validate notifications.
   > Licensed under CC0-1.0 (https://creativecommons.org/publicdomain/zero/1.0/).
 
 ## IdentityServer4 4.1.2

@@ -187,8 +187,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
             EnsureArg.IsNotNull(subscription, nameof(subscription));
             var errors = new List<string>();
 
-            // A stopped subscription sends nothing, so it can still be switched off after its topic is retired or deleted, or the
-            // endpoint policy is tightened. Requesting it again validates the topic and endpoint.
+            // A stopped subscription sends nothing, so it can still be switched off after its topic or the endpoint policy changes.
+            // Requesting it again validates the topic, filters and endpoint.
             bool live = subscription.Status.IsLive();
             if (live)
             {
@@ -244,7 +244,7 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
                 }
             }
 
-            if (topic != null)
+            if (live && topic != null)
             {
                 ValidateFilters(subscription, topic, errors);
             }

@@ -52,6 +52,7 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
         private readonly SchemaInformation _schemaInformation;
         private readonly SubscriptionsConfiguration _configuration;
         private readonly ISubscriptionMetricHandler _metrics;
+        private readonly IFhirServerInstanceConfiguration _instanceConfiguration;
         private readonly ILogger<SubscriptionEventWatchdog> _logger;
         private DateTimeOffset _lastCleanup = DateTimeOffset.MinValue;
         private string _reportedUnavailable;
@@ -66,7 +67,8 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
             IOptions<SubscriptionsConfiguration> configuration,
             ISqlRetryService sqlRetryService,
             ILogger<SubscriptionEventWatchdog> logger,
-            ISubscriptionMetricHandler metrics = null)
+            ISubscriptionMetricHandler metrics = null,
+            IFhirServerInstanceConfiguration instanceConfiguration = null)
             : base(sqlRetryService, logger)
         {
             _sources = EnsureArg.IsNotNull(sources, nameof(sources)).ToList();
@@ -78,6 +80,7 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
             _configuration = EnsureArg.IsNotNull(configuration?.Value, nameof(configuration));
             _logger = EnsureArg.IsNotNull(logger, nameof(logger));
             _metrics = metrics;
+            _instanceConfiguration = instanceConfiguration;
             PeriodSec = Math.Max(0.1, _configuration.PumpPeriodSeconds);
         }
 
@@ -240,7 +243,7 @@ namespace Microsoft.Health.Fhir.SqlServer.Features.Watchdogs
 
         private void SetBackgroundRequestContext()
         {
-            _requestContextAccessor.RequestContext = SubscriptionBackgroundContext.Create(Name, Guid.NewGuid().ToString());
+            _requestContextAccessor.RequestContext = SubscriptionBackgroundContext.Create(Name, _instanceConfiguration?.BaseUri, Guid.NewGuid().ToString());
         }
     }
 }

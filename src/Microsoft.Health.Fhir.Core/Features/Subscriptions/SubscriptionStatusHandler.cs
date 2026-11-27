@@ -70,7 +70,8 @@ namespace Microsoft.Health.Fhir.Core.Features.Subscriptions
         {
             EnsureArg.IsNotNull(request, nameof(request));
 
-            await _authorizationService.CheckAccess(DataActions.Read, true, cancellationToken);
+            // Same access as reading a subscription by id; each subscription is then read with the caller's own access checks.
+            await _authorizationService.CheckGetAccess(cancellationToken);
 
             if (!_configuration.Enabled || !_converter.IsSupported)
             {
